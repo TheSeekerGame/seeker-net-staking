@@ -26,7 +26,7 @@
      panels, white for what matters, gold kept for the balance. */
   :root {
     --bg: #060607; --panel: #0d0d0f; --well: #080809; --line: #1f1f24; --line2: #2c2c33; --text: #ececef; --muted: #7a7a84;
-    --accent: #ececef; --pale: #ffffff; --gold: #e3cf8e; --warn: #b9a87b; --bad: #e8857a; --pos: #abe3d9;
+    --accent: #ececef; --pale: #ffffff; --gold: #e3cf8e; --warn: #b9a87b; --bad: #e8857a; --pos: #abe3d9; --green: #8fd19e;
   }
   * { box-sizing: border-box; }
   html { background: var(--bg); color-scheme: dark; }
@@ -63,7 +63,7 @@
   button { white-space: nowrap; }
   #message { margin: 12px 0 0; min-height: 0; }
   .bad { color: var(--bad); } .warn { color: var(--warn); } .ok { color: var(--pos); }
-  .staked { color: var(--gold); } .listedc { color: var(--bad); }
+  .staked { color: var(--green); } .listedc { color: var(--bad); }
   .balance { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 0 0 4px; }
   /* the big digits' own side space pulled back, so their ink starts on the same line as everything else */
   .balance b { font-size: 46px; line-height: 1.1; color: var(--gold); font-variant-numeric: tabular-nums; margin-left: -0.043em; }
@@ -74,7 +74,7 @@
     display: flex; flex-direction: column; justify-content: space-between; gap: 6px; }
   .tile b { display: block; font-size: 20px; line-height: 26px; font-variant-numeric: tabular-nums; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .chip { border: 1px solid #4a4230; color: var(--gold); background: var(--well); border-radius: 999px; padding: 1px 10px; text-decoration: none; font-size: 13px; }
+  .chip { border: 1px solid #2c4a33; color: var(--green); background: var(--well); border-radius: 999px; padding: 1px 10px; text-decoration: none; font-size: 13px; }
   .chip.listed { border-color: #5a2f2b; color: var(--bad); }
   .chip:hover, .chip:focus-visible { border-color: currentColor; }
   table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
@@ -313,7 +313,7 @@ async function show(input) {
     className: 'chip' + (m.listed ? ' listed' : ''), href: seekerLink(m.id), target: '_blank', rel: 'noopener',
     textContent: '#' + m.id + (m.listed ? ' listed' : ''), title: m.listed ? 'Listed: earning nothing' : 'Staked: earning 1 a day',
   })));
-  $('seekersNote').textContent = 'gold: staked, earning 1 a day. red: listed, earning nothing until the listing ends or is delisted on-chain (see "how to delist" below).';
+  $('seekersNote').textContent = 'green: staked, earning 1 a day. red: listed, earning nothing until the listing ends or is delisted on-chain (see "how to delist" below).';
   $('seekersNote').hidden = !listed;
 
   const row = (label, units, cls) => el('tr', { className: cls || '' }, el('td', { textContent: label }), el('td', { className: 'n', textContent: units }));
