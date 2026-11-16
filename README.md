@@ -17,7 +17,7 @@ the same balance for every wallet, to the unit.
 |---|---|
 | `data/genesis.json` | the start: its block and time, the rules' numbers, who held every seeker (from the chain), and the OpenSea listings live at that moment (read from OpenSea then; their orders, as OpenSea served them, are in `data/orders.jsonl`) |
 | `data/events.jsonl` | every move of a seeker since the start (the chain's Transfer events, in chain order), plus any correction made by hand |
-| `data/cancels.jsonl` | the on-chain cancellations that can end a seeker listing (Seaport's `OrderCancelled` and `CounterIncremented`) |
+| `data/cancels.jsonl` | the on-chain cancellations and sales that end a seeker listing (Seaport's `OrderCancelled`, `CounterIncremented` and `OrderFulfilled`) |
 | `data/listings.jsonl` | the OpenSea listings of seekers since the start, from OpenSea's listing history. Relistings that overlap another listing of the same seeker are left out once they end, since they change no balance (the bot only leaves them out after checking every wallet's numbers come out the same) |
 | `data/orders.jsonl` | the orders behind the listings live at the start, as OpenSea served them (without signatures; an archive, the rules never read it) |
 | `data/head.json` | how far the copy goes |
@@ -37,6 +37,7 @@ whole numbers (1 credit = 86,400 units, one per seeker per second).
 {"k":"move","t":1794573255,"b":113357302,"i":35,"id":622,"from":"0x…","to":"0x…","tx":"0x…"}
 {"k":"cancel","t":1794600000,"b":113600000,"i":4,"h":"0x…order hash","a":"0x…lister","tx":"0x…"}
 {"k":"counter","t":1794600000,"b":113600000,"i":4,"a":"0x…lister","tx":"0x…"}
+{"k":"fill","t":1794600000,"b":113600000,"i":4,"h":"0x…order hash","a":"0x…lister","tx":"0x…"}
 {"h":"0x…order hash","id":295,"maker":"0x…","t":1794600000,"s":1794600000,"e":1797192000}
 ```
 
@@ -44,6 +45,8 @@ whole numbers (1 credit = 86,400 units, one per seeker per second).
   position `i`, time `t` (the block's), transaction `tx`.
 - `cancel` / `counter`: Seaport's `OrderCancelled` for a recorded listing, or
   `CounterIncremented` by a lister (it ends all the listings they posted before it).
+- `fill`: Seaport's `OrderFulfilled` for a recorded listing: it was bought, so
+  it can never be bought again and is over for good.
 - a listing: order hash `h`, seeker `id`, lister `maker`, posted at `t`, signed
   start `s` and end date `e`, as OpenSea's listing history has them.
 - `adjust`: a correction made by hand, with `a` (address), `credits` and a
@@ -53,7 +56,8 @@ Only an on-chain cancellation ends a listing early. OpenSea's normal cancel on
 Robinhood Chain is one (you approve a small transaction); a cancel that doesn't
 go on-chain leaves no record of when it happened, so it can't count. A listing
 otherwise counts until its end date, whenever its lister holds the seeker: it pauses
-while the seeker is in another wallet and counts again if it comes back. The exact rules are at the
+while the seeker is in another wallet and counts again if it comes back. A listing
+that was bought (Seaport's `OrderFulfilled`) is over for good. The exact rules are at the
 top of `rules.js` and, in plain words, on the page.
 
 ## Check it yourself
@@ -76,7 +80,7 @@ The one thing it can't rebuild is the listings live at the start: they were read
 from OpenSea once, at the start, and are published as read. `verify` only checks
 that each was by the seeker's holder, live at the start, and matches its
 published order. OpenSea's history can take a while to fill in, so listings from
-the last few hours may still be added (and once a day the bot re-reads the last
+the last day or so may still be added (and once a day the bot re-reads the last
 day and a half).
 
 ## Running the bot

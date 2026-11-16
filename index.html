@@ -176,7 +176,7 @@
     <p style="margin:0 0 12px">To delist, on OpenSea open <b>More → Profile → Listings</b>, tick the listing, click <b>Cancel Listings</b>, and approve the small transaction in your wallet (a fraction of a cent). Your seeker earns again right away.</p>
     <p style="margin:0 0 12px">If you have changed a listing, or want to cancel everything at once, click <b>Cancel all listings and offers</b> (top right) instead. It also ends the older listings OpenSea replaced, but it cancels your offers and your listings in other collections on Robinhood Chain too.</p>
     <p style="margin:0 0 12px"><b>Tip:</b> when you list, pick a short duration (OpenSea lets you choose an hour or a day). If you might change your mind, don't list for weeks.</p>
-    <p class="muted" style="margin:0">A sale or transfer also stops the listing: the seeker arrives staked for its new owner. If it ever comes back to you before that listing's end date, the listing is live again and can be bought at its old price, so cancel it on-chain.</p>
+    <p class="muted" style="margin:0">A sale or transfer also stops the listing: the seeker arrives staked for its new owner. The listing that was bought is over for good, but your other listings of that seeker come back if it returns to you before their end date. To end those for good, use <b>Cancel all listings and offers</b>; it works even while the seeker is away.</p>
   </div>
 
   <div class="panel">
@@ -187,7 +187,7 @@
       <dt>Earning</dt>
       <dd>Every unlisted seeker earns its owner 1 credit per day, counted by the second. Nothing to click or sign.</dd>
       <dt>What "listed" means</dt>
-      <dd>A seeker is listed while its holder has a live OpenSea listing for it (any price, private listings too): from when it's posted (or its start time, if later) until its end date or an on-chain cancel. If the seeker moves to another wallet, the listing pauses; if it comes back before the end date, the listing counts again, since it can be bought again. Listed seekers earn nothing.</dd>
+      <dd>A seeker is listed while its holder has a live OpenSea listing for it (any price, private listings too): from when it's posted (or its start time, if later) until its end date, an on-chain cancel, or its own sale (a listing can be bought only once). If the seeker moves to another wallet any other way, the listing pauses; if it comes back before the end date, the listing counts again, since it can be bought again. Listed seekers earn nothing.</dd>
       <dt>Ending a listing early</dt>
       <dd>Only an on-chain cancel ends a listing before its end date. On OpenSea that's the normal cancel, which asks you to approve a small transaction (see "How to delist" above). A cancel that doesn't go through your wallet leaves no public record, so the listing keeps counting until its end date.</dd>
       <dt>Selling and moving</dt>
@@ -197,7 +197,7 @@
       <dt>Why it works this way</dt>
       <dd>So anyone can check every number. Balances follow only from permanent public records, the chain and OpenSea's listing history, so anyone who replays them gets exactly the same result for every wallet, to the second. When the bot runs changes nothing. A cancel that doesn't go on-chain leaves no such record, which is why only on-chain cancels count.</dd>
       <dt>Check it yourself</dt>
-      <dd>Every balance follows from public files: <a href="data/genesis.json">the start</a>, <a href="data/events.jsonl">the moves</a>, <a href="data/cancels.jsonl">the on-chain cancellations</a> and <a href="data/listings.jsonl">the listings</a>, with <a href="rules.js">one short rules file</a>. The bot runs that file on them and publishes the results this page shows; anyone who runs it on the same files gets the same numbers. Its verify command rebuilds the files from the chain and OpenSea's history and checks they match<span id="repo"></span>. The one thing it can't rebuild is the listings live at the start: they were read from OpenSea once, at the start, and are published as read. Relistings that overlap another listing of the same seeker are left out of the listings file once they end, since they change no balance. Listings from the last few hours can still be added as OpenSea's history catches up. A correction, if ever needed, is added as its own entry with the reason.</dd>
+      <dd>Every balance follows from public files: <a href="data/genesis.json">the start</a>, <a href="data/events.jsonl">the moves</a>, <a href="data/cancels.jsonl">the on-chain cancellations</a> and <a href="data/listings.jsonl">the listings</a>, with <a href="rules.js">one short rules file</a>. The bot runs that file on them and publishes the results this page shows; anyone who runs it on the same files gets the same numbers. Its verify command rebuilds the files from the chain and OpenSea's history and checks they match<span id="repo"></span>. The one thing it can't rebuild is the listings live at the start: they were read from OpenSea once, at the start, and are published as read. Relistings that overlap another listing of the same seeker are left out of the listings file once they end, since they change no balance. Listings from the last day or so can still be added as OpenSea's history catches up. A correction, if ever needed, is added as its own entry with the reason.</dd>
     </dl>
   </div>
 </main>
@@ -313,10 +313,12 @@ async function show(input, again) {
   // (rounded down, so it never shows a credit before it is earned)
   const live = Date.now() / 1000 - x.time < 7200;
   const tick = () => {
-    const since = live ? Math.max(0, Date.now() / 1000 - x.time) : 0;
+    const since = live ? Math.floor(Math.max(0, Date.now() / 1000 - x.time)) : 0;
     const hundredths = Math.floor((x.units + since * perDay) * 100 / R.UNIT);
     $('balance').textContent = Math.floor(hundredths / 100).toLocaleString('en');
     $('fraction').textContent = '.' + String(hundredths % 100).padStart(2, '0');
+    if ($('sumEarned')) $('sumEarned').textContent = signed(x.earned + since * perDay) || '0.00';
+    if ($('sumTotal')) $('sumTotal').textContent = cr(x.units + since * perDay);
   };
   tick();
   if (live && perDay) ticker = setInterval(tick, 1000);
@@ -338,14 +340,15 @@ async function show(input, again) {
   $('seekersNote').textContent = 'green: staked, earning 1 a day. red: listed, earning nothing until the date shown (when its last listing ends), or until delisted on-chain (see "how to delist" below).';
   $('seekersNote').hidden = !listed;
 
-  const row = (label, units, cls) => el('tr', { className: cls || '' }, el('td', { textContent: label }), el('td', { className: 'n', textContent: units }));
+  const row = (label, units, cls, id) => el('tr', { className: cls || '' }, el('td', { textContent: label }), el('td', { className: 'n', textContent: units, id: id || '' }));
   const lines = [row(x.start ? 'Start' : 'Start (no seekers then)', signed(x.start) || '0.00'),
-                 row('Earned by holding', signed(x.earned) || '0.00')];
+                 row('Earned by holding', signed(x.earned) || '0.00', '', 'sumEarned')];
   if (x.received) lines.push(row('Received with seekers', signed(x.received)));
   if (x.sent) lines.push(row('Sent with seekers', signed(-x.sent)));
   if (x.adjusted) lines.push(row('Corrections', signed(x.adjusted)));
-  lines.push(row('Balance', cr(x.units), 'total'));
+  lines.push(row('Balance', cr(x.units), 'total', 'sumTotal'));
   $('sum').replaceChildren(...lines);
+  tick();
 
   const what = h => {
     const seeker = h.id ? el('a', { href: seekerLink(h.id), target: '_blank', rel: 'noopener', textContent: '#' + h.id }) : '';

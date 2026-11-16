@@ -20,12 +20,16 @@ concurrency:
 jobs:
   tick:
     runs-on: ubuntu-latest
+    timeout-minutes: 8     # a stuck run never holds up the next timer for long
     steps:
       - name: Wait 5 minutes, start the next timer, start a round
         run: |
           sleep 300
           # each with a few tries, and the next timer first, so one failed call never stops the chain
-          for i in 1 2 3 4 5; do gh workflow run timer.yml --repo "$GITHUB_REPOSITORY" --ref main && break; sleep 15; done
-          for i in 1 2 3; do gh workflow run credits.yml --repo "$GITHUB_REPOSITORY" --ref main && break; sleep 15; done
+          next=no; round=no
+          for i in 1 2 3 4 5; do gh workflow run timer.yml --repo "$GITHUB_REPOSITORY" --ref main && { next=yes; break; }; sleep 15; done
+          for i in 1 2 3; do gh workflow run credits.yml --repo "$GITHUB_REPOSITORY" --ref main && { round=yes; break; }; sleep 15; done
+          # shows red in Actions if the chain broke or a round could not be started
+          [ "$next" = yes ] && [ "$round" = yes ]
         env:
           GH_TOKEN: ${{ github.token }}

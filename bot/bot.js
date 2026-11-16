@@ -13,10 +13,10 @@
    works the balances out from them (see the top of rules.js):
      genesis.json   made once, by the first `run`: the start
      events.jsonl   every move of a seeker since the start, in chain order
-     cancels.jsonl  the on-chain cancellations that can end a seeker listing
+     cancels.jsonl  the on-chain cancellations and sales that end a seeker listing
      listings.jsonl OpenSea listings of seekers that went live after the start
-     orders.jsonl   the signed orders behind those listings, where OpenSea still
-                    serves them (an archive: the rules never read it)
+     orders.jsonl   the orders behind the listings live at the start, as OpenSea
+                    served them (an archive: the rules never read it)
      head.json      how far the copy goes
    When a round runs, or whether one is missed, changes nothing: the next round
    copies the same records. `verify` rebuilds everything from scratch.
@@ -56,6 +56,7 @@ const TOPIC = {
   transfer: '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',   // Transfer(address,address,uint256)
   cancel: '0x6bacc01dbe442496068f7d234edd811f1a5f833243e0aec824f86ab861f3c90d',     // OrderCancelled(bytes32,address,address)
   counter: '0x721c20121297512b72821b97f5326877ea8ecf4bb9948fea5bfcb6453074d37f',    // CounterIncremented(uint256,address)
+  fill: '0x9d9af8e38d66c62e2c12f0225249fd9d721c54b83f48d9352c97c6cacdcb6f31',       // OrderFulfilled(bytes32,address,address,address,(uint8,address,uint256,uint256)[],(uint8,address,uint256,uint256,address)[])
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const hex = n => '0x' + n.toString(16);
@@ -138,15 +139,16 @@ const chainOrder = (a, b) => Number(a.blockNumber) - Number(b.blockNumber) || Nu
 
 const transferLogs = async (from, to) => (await logs({ address: CONFIG.nft, topics: [TOPIC.transfer] }, from, to)).sort(chainOrder);
 
-/** Seaport cancellations in blocks from..to, optionally only by some offerers. */
-async function seaportLogs(from, to, offerers) {
+/** Seaport's logs that can end a listing (cancellations and sales, or only the
+    `kinds` asked for) in blocks from..to, optionally only by some offerers. */
+async function seaportLogs(from, to, offerers, kinds = [TOPIC.cancel, TOPIC.counter, TOPIC.fill]) {
   const out = [];
   for (const address of CONFIG.seaports) {
-    if (!offerers) { out.push(...await logs({ address, topics: [[TOPIC.cancel, TOPIC.counter]] }, from, to)); continue; }
+    if (!offerers) { out.push(...await logs({ address, topics: [kinds] }, from, to)); continue; }
     const list = [...offerers];
     for (let i = 0; i < list.length; i += 100) {
       const who = list.slice(i, i + 100).map(a => '0x' + a.slice(2).padStart(64, '0'));
-      out.push(...await logs({ address, topics: [[TOPIC.cancel, TOPIC.counter], who] }, from, to, 100000));   // the RPC takes lists of addresses over at most 100,000 blocks
+      out.push(...await logs({ address, topics: [kinds, who] }, from, to, 100000));   // the RPC takes lists of addresses over at most 100,000 blocks
     }
   }
   return out.sort(chainOrder);
@@ -181,21 +183,23 @@ async function moveEvents(from, to) {
                            id: Number(BigInt(l.topics[3])), from: addr(l.topics[1]), to: addr(l.topics[2]), tx: l.transactionHash }));
 }
 
-/** Of the Seaport logs of listers' wallets, the cancellations that can end a
-    seeker listing, as records (see rules.js): OrderCancelled for a listing in
-    the record, and CounterIncremented after one of the lister's listings was
-    posted and before its end date. Everything else those wallets cancel (their
-    offers, other collections) is left out. */
+/** Of the Seaport logs of listers' wallets, the ones that end a seeker listing,
+    as records (see rules.js): OrderCancelled or OrderFulfilled (it was bought)
+    for a listing in the record, and CounterIncremented after one of the
+    lister's listings was posted and before its end date. Everything else those
+    wallets cancel or sell (their offers, other collections) is left out. */
 async function cancelEvents(seaport, listings) {
   const hashes = new Set(listings.map(l => l.h));
   const byMaker = new Map();
   for (const l of listings) { if (!byMaker.has(l.maker)) byMaker.set(l.maker, []); byMaker.get(l.maker).push(l); }
-  const candidates = seaport.filter(l => l.topics[0] === TOPIC.cancel ? hashes.has(l.data.slice(0, 66).toLowerCase()) : byMaker.has(addr(l.topics[1])));
+  const kind = l => l.topics[0] === TOPIC.cancel ? 'cancel' : l.topics[0] === TOPIC.fill ? 'fill' : 'counter';
+  const hashOf = l => l.data.slice(0, 66).toLowerCase();        // both events begin with the order hash
+  const candidates = seaport.filter(l => kind(l) === 'counter' ? byMaker.has(addr(l.topics[1])) : hashes.has(hashOf(l)));
   const time = await blockTimes(candidates.map(l => l.blockNumber));
   const out = [];
   for (const l of candidates) {
     const base = { t: time.get(Number(l.blockNumber)), b: Number(l.blockNumber), i: Number(l.logIndex) };
-    if (l.topics[0] === TOPIC.cancel) out.push({ k: 'cancel', ...base, h: l.data.slice(0, 66).toLowerCase(), a: addr(l.topics[1]), tx: l.transactionHash });
+    if (kind(l) !== 'counter') out.push({ k: kind(l), ...base, h: hashOf(l), a: addr(l.topics[1]), tx: l.transactionHash });
     else if (byMaker.get(addr(l.topics[1])).some(x => x.t < base.t && base.t < x.e)) out.push({ k: 'counter', ...base, a: addr(l.topics[1]), tx: l.transactionHash });
   }
   return out.sort((a, b) => a.b - b.b || a.i - b.i);
@@ -265,7 +269,7 @@ function listingFromEvent(ev) {
 async function listingHistory(after, before) {
   const out = new Map();
   for (let a = after; a < before; a += CONFIG.slice) {
-    for (const l of await historySlice(a, Math.min(before, a + CONFIG.slice))) out.set(l.h, l);
+    for (const l of await historySlice(a - 1, Math.min(before, a + CONFIG.slice) + 1)) out.set(l.h, l);   // overlapping by a second
   }
   return [...out.values()].sort((a, b) => a.t - b.t || (a.h < b.h ? -1 : 1));
 }
@@ -295,7 +299,7 @@ async function historySlice(after, before) {
   throw new Error(`OpenSea kept sending pages for ${new Date(after * 1000).toISOString()} to ${new Date(before * 1000).toISOString()}`);
 }
 
-/** The signed orders behind the collection's current listings (for the archive). */
+/** The orders behind the collection's current listings (for the archive). */
 async function currentOrders() {
   const out = [];
   let next = null;
@@ -318,7 +322,7 @@ async function currentOrders() {
 /** The listings live at the start: OpenSea's active listings of seekers read at
     the start, kept if live at time T (signed start at or before T, end date
     after T, posted at or before T) and made by the seeker's holder at T. They
-    are published in genesis.json with their signed orders (orders.jsonl). */
+    are published in genesis.json with their orders (orders.jsonl). */
 function snapshotListings(orders, owners, T) {
   const out = new Map();
   for (const o of orders) {
@@ -408,7 +412,7 @@ function estimateBlock(genesis, head, time) {
 
 /** The start (the round run with START=true): the block, who holds every
     seeker at it (from the chain), and the OpenSea listings live at it (read from
-    OpenSea at that moment and published with their signed orders). */
+    OpenSea at that moment and published with their orders). */
 async function start() {
   if (!/^(true|1)$/.test(process.env.START || '')) return console.log('the count has not started');
   const latest = await blockAt('latest');
@@ -451,21 +455,30 @@ async function run() {
   // OpenSea's listing history: the last hours are read again each round, and once a day the last day and a half,
   // since it can fill in late; after an outage it catches up a few hours per round
   let added = [], listingsTime = head.listingsTime, deepRead = head.deepRead || genesis.time, failures = head.failures || 0;
+  const known = new Set(listings.map(l => l.h)), found = new Map();
+  const take = seen => { for (const l of seen) if (!known.has(l.h) && Rules.liveFrom(l) >= genesis.time) found.set(l.h, l); };
+  const T = now();
   try {
-    const T = now(), deep = T - deepRead > 86400 && T - head.listingsTime < 3600;
-    const from = Math.max(genesis.time, head.listingsTime - (deep ? CONFIG.deepReread : CONFIG.reread));
+    const from = Math.max(genesis.time, head.listingsTime - CONFIG.reread);
     const to = Math.min(T, Math.max(from, head.listingsTime) + CONFIG.readMax);
-    const known = new Set(listings.map(l => l.h));
-    const seen = await listingHistory(from, to);
-    added = seen.filter(l => !known.has(l.h) && Rules.liveFrom(l) >= genesis.time);
+    take(await listingHistory(from, to));
     listingsTime = to;
-    if (deep) deepRead = T;
     if (to < T) console.log(`catching up on OpenSea's listing history: read up to ${new Date(to * 1000).toISOString()}`);
     failures = 0;
   } catch (e) {
     failures++;
     console.log(`OpenSea's listing history could not be read this round (${e.message}); the next round reads it again`);
   }
+  if (!failures && listingsTime === T && T - deepRead > 86400) {
+    try {
+      take(await listingHistory(Math.max(genesis.time, T - CONFIG.deepReread), T - CONFIG.reread));
+      deepRead = T;
+      console.log('read the last day and a half of OpenSea\'s listing history again, for listings it showed late');
+    } catch (e) {
+      console.log(`the daily longer read of OpenSea's listing history failed (${e.message}); a later round tries again`);
+    }
+  }
+  added = [...found.values()].sort((a, b) => a.t - b.t || (a.h < b.h ? -1 : 1));
   const all = (genesis.listings || []).concat(listings, added);
 
   // the chain: the moves, and the Seaport logs of every lister's wallet
@@ -473,6 +486,9 @@ async function run() {
   const moves = (await moveEvents(head.block + 1, block.number)).filter(e => !recorded.has(e.b + ':' + e.i));
   const makers = new Set(all.map(l => l.maker));
   let seaport = makers.size ? await seaportLogs(head.block + 1, block.number, makers) : [];
+  if (!head.fills && makers.size && head.block > genesis.block) {   // the first round that records sales looks back to the start for them
+    seaport = seaport.concat(await seaportLogs(genesis.block + 1, head.block, makers, [TOPIC.fill]));
+  }
   const late = added.filter(l => l.t < head.time);              // found late: look back for their cancellations too
   if (late.length) {
     const from = Math.max(genesis.block + 1, estimateBlock(genesis, head, Math.min(...late.map(l => l.t))) - 200000);
@@ -487,10 +503,10 @@ async function run() {
   writeLines('listings.jsonl', kept);
   writeLines('cancels.jsonl', cancels.concat(freshCancels));
   writeLines('events.jsonl', events.concat(moves));
-  writeJson('head.json', { block: block.number, time: block.time, listingsTime, deepRead, failures,
+  writeJson('head.json', { block: block.number, time: block.time, listingsTime, deepRead, failures, fills: 1,
                            events: events.length + moves.length, cancels: cancels.length + freshCancels.length,
                            listings: kept.length });
-  console.log(`block ${block.number}: ${moves.length} moves, ${freshCancels.length} on-chain cancellations of listings, ` +
+  console.log(`block ${block.number}: ${moves.length} moves, ${freshCancels.length} on-chain cancellations or sales of listings, ` +
               `${added.length} new listings, ${listings.length + added.length - kept.length} overlapping relistings left out; ` +
               `${after.listedCount} seekers listed; ${Rules.credits(after.total, 0)} credits exist`);
   if (failures >= CONFIG.failAfter) {
@@ -505,7 +521,7 @@ async function check() {
   const owners = await ownersAt(latest.number - CONFIG.lag);
   console.log(`chain: ${new Set(owners).size} holder addresses`);
   const hourAgo = await blockBefore(latest.time - 3600);
-  const cancels = await seaportLogs(hourAgo.number, latest.number, null);
+  const cancels = await seaportLogs(hourAgo.number, latest.number, null, [TOPIC.cancel, TOPIC.counter]);
   const held = new Set(owners);
   console.log(`chain: ${cancels.length} Seaport cancellations in the last hour, ${cancels.filter(l => held.has(addr(l.topics[1]))).length} by seeker holders`);
   const r = await opensea(`/events/collection/${CONFIG.slug}?event_type=listing&limit=3&after=${now() - 86400}&before=${now()}`);
@@ -517,7 +533,7 @@ async function check() {
   console.log(`opensea: of those, ${new Set(liveNow.map(l => l.id)).size} seekers have one that is before its end date and by the holder`);
   console.log(`opensea: for example ${liveNow.slice(0, 8).map(l => `#${l.id} (until ${new Date(l.e * 1000).toISOString().slice(0, 10)})`).join(' ')}`);
   const orders = await currentOrders();
-  console.log(`opensea: ${orders.length} current listings with their signed orders; protocols ${[...new Set(orders.map(o => o.protocol))].join(', ')}`);
+  console.log(`opensea: ${orders.length} current listings with their orders; protocols ${[...new Set(orders.map(o => o.protocol))].join(', ')}`);
 }
 
 async function verify() {
@@ -542,7 +558,7 @@ async function verify() {
   say(start.every(l => owners[l.id - 1] === l.maker && Rules.liveFrom(l) <= genesis.time && l.e > genesis.time),
       `the ${start.length} listings live at the start were each made by the seeker's holder at the start, posted before it and ending after it`);
   say(start.every(l => { const o = archived.get(l.h); return o && String(o.parameters.offerer).toLowerCase() === l.maker && Number(o.parameters.endTime) === l.e; }),
-      `each of them is published with its signed order (data/orders.jsonl)`);
+      `each of them is published with its order (data/orders.jsonl)`);
   let all = start.concat(listings), history = null;
   try { history = await listingHistory(genesis.time, now()); } catch (e) { say(false, `OpenSea's listing history could not be read (${e.message}), so the listings could not be checked`); }
   if (history) {
@@ -558,7 +574,7 @@ async function verify() {
   const chainCancels = makers.size ? await cancelEvents(await seaportLogs(genesis.block + 1, head.block, makers), all) : [];
   const ck = c => JSON.stringify([c.k, c.t, c.b, c.i, c.h, c.a, c.tx]);
   const real = new Set(chainCancels.map(ck));
-  say(cancels.every(c => real.has(ck(c))), `the ${cancels.length} on-chain cancellations on record are all real (the chain has ${chainCancels.length} for these listings)`);
+  say(cancels.every(c => real.has(ck(c))), `the ${cancels.length} on-chain cancellations and sales on record are all real (the chain has ${chainCancels.length} for these listings)`);
   if (history) {
     // end to end: everything rebuilt from the chain and OpenSea's full history, against the record
     const rebuilt = Rules.replay(genesis, moves.concat(fixes, chainCancels), all.filter(l => !(genesis.listings || []).some(x => x.h === l.h)), head.time);
@@ -642,7 +658,7 @@ function publish(dir) {
   console.log(`published ${n} wallets and the summary at block ${head.block}`);
 }
 
-module.exports = { CONFIG, TOPIC, blockAt, blockBefore, ownersAt, moveEvents, cancelEvents, listingFromEvent, seconds, snapshotListings, prune };
+module.exports = { CONFIG, TOPIC, blockAt, blockBefore, ownersAt, moveEvents, seaportLogs, cancelEvents, listingFromEvent, seconds, snapshotListings, prune };
 
 if (require.main === module) {
   const [command, argument] = process.argv.slice(2);

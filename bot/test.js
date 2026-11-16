@@ -134,6 +134,29 @@ test('a listing pauses while the seeker is in another wallet and counts again wh
   assert.ok(bal(w, A) < 7 + 1.01);
 });
 
+test('a listing that was bought is over for good: it does not come back with the seeker', () => {
+  const L = [listing('0xh1', 1, A, 1, 30)];
+  // a sale: Seaport's OrderFulfilled and the Transfer are in one transaction, in either order
+  const sale = fillFirst => {
+    const b = ++n;
+    return [{ k: 'move', t: at(2), b, i: fillFirst ? 5 : 1, id: 1, from: A, to: B, tx: '0x5' },
+            { k: 'fill', t: at(2), b, i: fillFirst ? 1 : 5, h: '0xh1', a: A, tx: '0x5' }];
+  };
+  for (const fillFirst of [true, false]) {
+    const s = play(genesis([A]), [...sale(fillFirst), move(3, 1, B, A)], L, 10);
+    assert.equal(s.listed[1], 0);
+    assert.equal(bal(s, A), (7 + 1 - 7) + 7 + 7);                       // earned day 0-1, sold (-7), bought back (+7), earning days 3-10
+    assert.equal(bal(s, B), 7 + 1 - 7);
+    assert.deepEqual(s.accounts.get(A).history.map(h => h.k), ['start', 'list', 'out', 'in']);
+    assert.deepEqual(s.spans.get('0xh1'), [[at(1), at(2)]]);
+    assert.equal(s.accounts.get(A).unlisted, 1);
+  }
+  // another listing of that seeker, not the one that was bought, still counts again
+  const two = play(genesis([A]), [...sale(true), move(3, 1, B, A)], [...L, listing('0xh2', 1, A, 1.5, 30)], 10);
+  assert.equal(two.listed[1], 1);
+  assert.deepEqual([...two.live.keys()], ['0xh2']);
+});
+
 test('a move takes 7 of the sender\'s credits to the new owner; a short seller gives what they have', () => {
   const s = play(genesis([A, B]), [move(3, 1, A, C)], [], 3);
   assert.equal(bal(s, A), 7 + 3 - 7);

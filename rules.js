@@ -11,10 +11,11 @@
                          their orders as OpenSea served them (data/orders.jsonl)
      data/events.jsonl   every move of a seeker since the start (its Transfer
                          events, in chain order), plus corrections made by hand
-     data/cancels.jsonl  the on-chain cancellations that can end a seeker
-                         listing: Seaport's OrderCancelled for a listing in the
-                         record, and CounterIncremented by a lister after one of
-                         their listings was posted and before its end date
+     data/cancels.jsonl  the on-chain cancellations and sales that end a seeker
+                         listing: Seaport's OrderCancelled or OrderFulfilled for
+                         a listing in the record, and CounterIncremented by a
+                         lister after one of their listings was posted and
+                         before its end date
      data/listings.jsonl the OpenSea listings of seekers posted since the
                          start, from OpenSea's listing history: when each was
                          posted, by whom, and the end date it was signed with.
@@ -34,7 +35,9 @@
         - the end date it was signed with,
         - an on-chain cancellation: Seaport's OrderCancelled for that order, or
           CounterIncremented by the lister (which ends all the listings they
-          posted before it).
+          posted before it),
+        - its own sale: Seaport's OrderFulfilled for that order (a listing can
+          be bought only once).
       A valid listing is live whenever its lister holds the seeker: it pauses
       while the seeker is in another wallet and counts again if it comes back,
       since it can then be bought again.
@@ -71,7 +74,7 @@
     const validOn = Array.from({ length: N + 1 }, () => new Set());  // seeker -> valid order hashes
     const live = new Map();               // order hash -> listing, while valid and its lister holds the seeker
     const liveOn = Array.from({ length: N + 1 }, () => new Set());   // seeker -> live order hashes
-    const cancelled = new Set();          // order hashes cancelled on-chain
+    const cancelled = new Set();          // order hashes cancelled on-chain, or bought
     const counterAt = new Map();          // lister -> time of their last CounterIncremented
     const accounts = new Map();
     const spans = new Map();              // order hash -> [[live from, live until], ...] (until null while live)
@@ -123,7 +126,7 @@
       if (liveOn[l.id].size === 0 && why !== 'moved') {
         const x = settle(account(owner[l.id]));
         x.unlisted++;
-        x.history.push({ t: now, k: 'unlist', id: l.id, d: 0, why });
+        if (why !== 'sold') x.history.push({ t: now, k: 'unlist', id: l.id, d: 0, why });   // a sale shows as the move that comes with it
       }
     }
 
@@ -203,6 +206,9 @@
       } else if (e.k === 'cancel') {                        // Seaport OrderCancelled
         cancelled.add(e.h);
         invalidate(e.h, 'cancelled');
+      } else if (e.k === 'fill') {                          // Seaport OrderFulfilled: the listing was bought, so it can never be bought again
+        cancelled.add(e.h);
+        invalidate(e.h, 'sold');
       } else if (e.k === 'counter') {                       // Seaport CounterIncremented: all of the lister's orders so far
         counterAt.set(e.a, e.t);
         for (const [h, l] of [...valid]) if (l.maker === e.a) invalidate(h, 'cancelled');
