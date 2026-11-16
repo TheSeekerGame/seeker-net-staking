@@ -25,6 +25,7 @@ on:
     branches: [main]
     paths: [index.html, rules.js, og.png, icon.png]
 permissions:
+  actions: write
   contents: write
   pages: write
   id-token: write
@@ -91,3 +92,10 @@ jobs:
           path: _site
       - id: deploy
         uses: actions/deploy-pages@v5
+      # While the first read of OpenSea's history is unfinished, start the next
+      # round right away instead of waiting for the timer.
+      - name: Carry on with the first read
+        if: always() && hashFiles('data/progress.json') != '' && hashFiles('data/genesis.json') == ''
+        run: gh workflow run credits.yml --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
