@@ -224,6 +224,23 @@ async function get(name, kind) {
   return r[kind]();
 }
 const wallet = address => get('wallets/' + address + '.json', 'json');
+// the repository, for links and for live progress before the first count is done
+const REPO = (() => {
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = location.pathname.split('/')[1];
+  return m && repo ? `${m[1]}/${repo}` : 'TheSeekerGame/seeker-net-staking';
+})();
+async function showProgress() {
+  try {
+    const r = await fetch(`https://raw.githubusercontent.com/${REPO}/main/data/progress.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const p = await r.json();
+    const line = el('div', null, `Reading OpenSea's listing history for the start: ${p.days} of ${p.totalDays} days done, ` +
+      `${p.listings.toLocaleString('en')} listings of seekers found so far (saved ${ago(Date.now() / 1000 - p.updated)}). `,
+      el('a', { href: `https://github.com/${REPO}/blob/main/data/history-cache.jsonl`, target: '_blank', rel: 'noopener', textContent: 'See the data collected so far' }), '.');
+    line.id = 'progress';
+    ($('progress') || $('status').appendChild(document.createElement('div'))).replaceWith(line);
+  } catch (e) { /* progress is a nice-to-have */ }
+}
 const addressLink = a => el('a', { href: '#' + a, textContent: short(a), title: a });
 
 async function load() {
@@ -239,6 +256,8 @@ async function load() {
       $('status').textContent = `Staking started at block ${at.block} (${utc}). Balances will show here soon.`;
       $('aboutStart').textContent = `Staking started at Robinhood Chain block ${at.block} (${utc}; ${when(at.time)} your time). ` +
         `Every wallet holding seekers then gets 7 credits per seeker, capped at 100 per wallet, so every seeker has credits behind it from the very first sale. Nothing before the start counts.`;
+      showProgress();
+      setInterval(showProgress, 30000);
       return say('staking has started. balances will show here soon, counted from the start.');
     }
     $('status').textContent = e.status === 404 ? 'Credits have not started yet. Come back soon.' : 'The data could not be loaded. Try again in a minute.';

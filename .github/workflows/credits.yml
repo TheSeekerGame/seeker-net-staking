@@ -47,6 +47,10 @@ jobs:
           path: .opensea-key.json
           key: opensea-key-none
           restore-keys: opensea-key-
+      - name: Who saves the record
+        run: |
+          git config user.name "seeker-credits-bot"
+          git config user.email "seeker-credits-bot@users.noreply.github.com"
       - name: One round
         timeout-minutes: 30
         run: |
@@ -59,6 +63,7 @@ jobs:
         env:
           OPENSEA_API_KEY: ${{ secrets.OPENSEA_API_KEY }}
           START: ${{ inputs.start }}
+          CREDITS_PUSH: '1'
       - name: Verify
         timeout-minutes: 30
         if: inputs.verify && hashFiles('data/genesis.json') != ''
@@ -73,8 +78,6 @@ jobs:
       - name: Save the record
         if: always()
         run: |
-          git config user.name "seeker-credits-bot"
-          git config user.email "seeker-credits-bot@users.noreply.github.com"
           mkdir -p data
           git add data
           git diff --cached --quiet || git commit -q -m "round: block $(node -p "try { require('./data/head.json').block } catch { 'start ' + require('./data/start.json').block }")"

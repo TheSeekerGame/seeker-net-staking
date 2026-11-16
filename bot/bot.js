@@ -29,6 +29,7 @@
 const fs = require('fs');
 const path = require('path');
 const Rules = require('../rules.js');
+const { execSync } = require('child_process');
 
 const CONFIG = {
   rpc: process.env.SEEKER_RPC || 'https://rpc.mainnet.chain.robinhood.com',
@@ -297,10 +298,19 @@ async function fullHistory(before, budgetMs) {
   const done = new Map(cache.map(c => [c.from, c]));
   const first = (await blockAt(CONFIG.firstBlock)).time;
   const day0 = Math.floor(first / 86400) * 86400;
+  const totalDays = Math.ceil((before - day0) / 86400);
+  let pushed = Date.now();
+  const progress = () => {
+    let found = 0;
+    for (const c of done.values()) found += c.listings.length;
+    writeJson('progress.json', { reading: 'OpenSea listing history', days: done.size, totalDays, listings: found,
+                                 from: day0, until: before, updated: now() });
+  };
   for (let from = day0; from < before; from += 86400) {
     if (done.has(from) && done.get(from).to === Math.min(from + 86400, before)) continue;
     if (Date.now() - began > budgetMs) {
-      console.log(`  stopping for this round: ${done.size} days of OpenSea's history read so far; the next round carries on`);
+      console.log(`  stopping for this round: ${done.size} of ${totalDays} days of OpenSea's history read; the next round carries on`);
+      checkpoint(`start: ${done.size} of ${totalDays} days of listing history read`);
       return null;
     }
     const to = Math.min(from + 86400, before);
@@ -308,11 +318,23 @@ async function fullHistory(before, budgetMs) {
     const row = { from, to, listings: day.filter(l => l.t >= from && l.t < to) };
     done.set(from, row);
     appendLines('history-cache.jsonl', [row]);
-    console.log(`  ${new Date(from * 1000).toISOString().slice(0, 10)}: ${row.listings.length} listings of seekers`);
+    progress();
+    console.log(`  ${new Date(from * 1000).toISOString().slice(0, 10)}: ${row.listings.length} listings of seekers (${done.size}/${totalDays} days)`);
+    if (Date.now() - pushed > 30e3) { checkpoint(`start: ${done.size} of ${totalDays} days of listing history read`); pushed = Date.now(); }
   }
   const all = new Map();
   for (const c of done.values()) for (const l of c.listings) all.set(l.h, l);
   return [...all.values()].sort((a, b) => a.t - b.t || (a.h < b.h ? -1 : 1));
+}
+
+/** On GitHub (CREDITS_PUSH=1): save data/ to the repository right away, so
+    progress is visible and kept even if the round is cut off later. */
+function checkpoint(message) {
+  if (!process.env.CREDITS_PUSH) return;
+  try {
+    execSync(`git add data && (git diff --cached --quiet || git commit -q -m ${JSON.stringify(message)}) && git pull -q --rebase && git push -q`,
+             { cwd: ROOT, stdio: 'inherit' });
+  } catch (e) { console.log(`  (could not save progress to the repository just now: ${e.message.split('\n')[0]})`); }
 }
 
 /** The signed orders behind the collection's current listings (for the archive). */
@@ -415,6 +437,7 @@ async function start() {
   writeLines('listings.jsonl', later);
   writeJson('head.json', { block: at.block, time: at.time, listingsTime: readUntil, events: 0, cancels: 0, listings: later.length });
   fs.rmSync(file('history-cache.jsonl'), { force: true });
+  fs.rmSync(file('progress.json'), { force: true });
   console.log(`start (block ${at.block}): ${holders.length} addresses get ${CONFIG.rules.start} credits per seeker, capped at ${CONFIG.rules.startMax} per wallet; ` +
               `${new Set(genesis.listings.map(l => l.id)).size} seekers listed at the start; ${later.length} listings since. The next round catches up to now.`);
 }
