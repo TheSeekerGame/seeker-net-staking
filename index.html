@@ -63,6 +63,7 @@
   button { white-space: nowrap; }
   #message { margin: 12px 0 0; min-height: 0; }
   .bad { color: var(--bad); } .warn { color: var(--warn); } .ok { color: var(--pos); }
+  .staked { color: var(--gold); } .listedc { color: var(--bad); }
   .balance { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 0 0 4px; }
   /* the big digits' own side space pulled back, so their ink starts on the same line as everything else */
   .balance b { font-size: 46px; line-height: 1.1; color: var(--gold); font-variant-numeric: tabular-nums; margin-left: -0.043em; }
@@ -73,9 +74,9 @@
     display: flex; flex-direction: column; justify-content: space-between; gap: 6px; }
   .tile b { display: block; font-size: 20px; line-height: 26px; font-variant-numeric: tabular-nums; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .chip { border: 1px solid var(--line2); color: var(--text); background: var(--well); border-radius: 999px; padding: 1px 10px; text-decoration: none; font-size: 13px; }
-  .chip.listed { border-color: #4a4230; color: var(--warn); }
-  .chip:hover, .chip:focus-visible { border-color: var(--muted); color: var(--pale); }
+  .chip { border: 1px solid #4a4230; color: var(--gold); background: var(--well); border-radius: 999px; padding: 1px 10px; text-decoration: none; font-size: 13px; }
+  .chip.listed { border-color: #5a2f2b; color: var(--bad); }
+  .chip:hover, .chip:focus-visible { border-color: currentColor; }
   table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   td, th { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
   td:first-child, th:first-child { padding-left: 0; }
@@ -131,7 +132,7 @@
       <div class="muted address" id="who"></div>
       <div class="tiles">
         <div class="tile"><span class="cap">seekers held</span><b id="held"></b></div>
-        <div class="tile"><span class="cap">staked</span><b id="earning" class="ok"></b></div>
+        <div class="tile"><span class="cap">staked</span><b id="earning" class="staked"></b></div>
         <div class="tile"><span class="cap">listed</span><b id="listedCount"></b></div>
       </div>
     </div>
@@ -159,8 +160,8 @@
     <div class="tiles" id="network" hidden>
       <div class="tile"><span class="cap">all credits</span><b id="nTotal"></b></div>
       <div class="tile"><span class="cap">holders</span><b id="nHolders"></b></div>
-      <div class="tile"><span class="cap">staked</span><b id="nEarning" class="ok"></b></div>
-      <div class="tile"><span class="cap">listed</span><b id="nListed"></b></div>
+      <div class="tile"><span class="cap">staked</span><b id="nEarning" class="staked"></b></div>
+      <div class="tile"><span class="cap">listed</span><b id="nListed" class="listedc"></b></div>
     </div>
   </div>
 
@@ -305,14 +306,14 @@ async function show(input) {
   $('held').textContent = mine.length;
   $('earning').textContent = earning;
   $('listedCount').textContent = listed;
-  $('listedCount').className = listed ? 'warn' : '';
+  $('listedCount').className = listed ? 'listedc' : '';
 
   $('seekersPanel').hidden = !mine.length;
   $('seekers').replaceChildren(...mine.map(m => el('a', {
     className: 'chip' + (m.listed ? ' listed' : ''), href: seekerLink(m.id), target: '_blank', rel: 'noopener',
     textContent: '#' + m.id + (m.listed ? ' listed' : ''), title: m.listed ? 'Listed: earning nothing' : 'Staked: earning 1 a day',
   })));
-  $('seekersNote').textContent = 'white: staked, earning 1 a day. gold: listed, earning nothing until the listing ends or is delisted on-chain (see "how to delist" below).';
+  $('seekersNote').textContent = 'gold: staked, earning 1 a day. red: listed, earning nothing until the listing ends or is delisted on-chain (see "how to delist" below).';
   $('seekersNote').hidden = !listed;
 
   const row = (label, units, cls) => el('tr', { className: cls || '' }, el('td', { textContent: label }), el('td', { className: 'n', textContent: units }));
