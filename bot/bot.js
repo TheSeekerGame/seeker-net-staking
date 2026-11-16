@@ -42,7 +42,11 @@ const CONFIG = {
   rules: { start: 7, startMax: 100, perDay: 1, moveMax: 7 },   // start: per seeker held, capped at startMax credits per wallet
   lag: 30,            // stay this many blocks (a few seconds) behind the newest one
   settle: 3600,       // OpenSea's history can take a while to fill in: verify only compares listings older than this,
-  reread: 3 * 3600,   // and every round re-reads this much of OpenSea's listing history (trading bots post thousands a day)
+  reread: 3 * 3600,   // and every round re-reads this much of OpenSea's listing history (trading bots post thousands a day),
+  deepReread: 36 * 3600,   // once a day a longer stretch, for listings OpenSea shows very late,
+  readMax: 12 * 3600,      // and after an outage it catches up this much per round
+  slice: 6 * 3600,         // the history is read in slices this long
+  failAfter: 6,            // rounds in a row without OpenSea before a round is marked failed
   opensea: 'https://api.opensea.io/api/v2',
 };
 const ROOT = path.join(__dirname, '..');
@@ -256,8 +260,16 @@ function listingFromEvent(ev) {
   return l;
 }
 
-/** OpenSea's listing history of the collection, posted in [after, before], oldest first. */
+/** OpenSea's listing history of the collection, posted in [after, before], oldest first.
+    Read in slices of a few hours, so its length never runs into a page limit. */
 async function listingHistory(after, before) {
+  const out = new Map();
+  for (let a = after; a < before; a += CONFIG.slice) {
+    for (const l of await historySlice(a, Math.min(before, a + CONFIG.slice))) out.set(l.h, l);
+  }
+  return [...out.values()].sort((a, b) => a.t - b.t || (a.h < b.h ? -1 : 1));
+}
+async function historySlice(after, before) {
   const out = new Map(), cursors = new Set();
   let next = null, events = 0, oldest = Infinity;
   for (let page = 0; page < 5000; page++) {
@@ -271,17 +283,16 @@ async function listingHistory(after, before) {
       const l = listingFromEvent(ev);
       if (l) out.set(l.h, l);
     }
-    if (page === 0 && r.asset_events[0]) console.log('  OpenSea: first event as sent: ' + JSON.stringify(r.asset_events[0]).slice(0, 700));
-    if (page % 10 === 9) console.log(`  OpenSea listing history: ${page + 1} pages, ${events} events, ${out.size} listings of seekers, back to ${new Date(oldest * 1000).toISOString()}`);
+    if (page % 50 === 49) console.log(`  OpenSea listing history: ${page + 1} pages, ${events} events, ${out.size} listings of seekers, back to ${new Date(oldest * 1000).toISOString()}`);
     next = r.next;
     const done = !next || !r.asset_events.length || cursors.has(next) || oldest < after;
     if (next) cursors.add(next);
     if (done) {
       console.log(`  OpenSea listing history: ${page + 1} pages, ${events} events, ${out.size} listings of seekers`);
-      return [...out.values()].sort((a, b) => a.t - b.t || (a.h < b.h ? -1 : 1));
+      return [...out.values()];
     }
   }
-  throw new Error('OpenSea kept sending pages');
+  throw new Error(`OpenSea kept sending pages for ${new Date(after * 1000).toISOString()} to ${new Date(before * 1000).toISOString()}`);
 }
 
 /** The signed orders behind the collection's current listings (for the archive). */
@@ -372,8 +383,10 @@ function prune(genesis, chain, listings, until) {
 const file = name => path.join(DATA, name);
 const readJson = name => JSON.parse(fs.readFileSync(file(name), 'utf8'));
 const readLines = name => fs.existsSync(file(name)) ? Rules.parseLines(fs.readFileSync(file(name), 'utf8')) : [];
-const writeLines = (name, rows) => fs.writeFileSync(file(name), rows.map(r => JSON.stringify(r) + '\n').join(''));
-const appendLines = (name, rows) => { if (rows.length) fs.appendFileSync(file(name), rows.map(r => JSON.stringify(r) + '\n').join('')); };
+function writeLines(name, rows) {
+  fs.writeFileSync(file(name) + '.tmp', rows.map(r => JSON.stringify(r) + '\n').join(''));
+  fs.renameSync(file(name) + '.tmp', file(name));
+}
 function writeJson(name, value) {
   fs.writeFileSync(file(name) + '.tmp', JSON.stringify(value) + '\n');
   fs.renameSync(file(name) + '.tmp', file(name));
@@ -434,21 +447,29 @@ async function run() {
   const block = await blockAt(latest.number - CONFIG.lag);
   if (block.number <= head.block) return console.log('nothing new');
 
-  // OpenSea's listing history: the last day is read again each round, since it can fill in late
-  let added = [], listingsTime = head.listingsTime, read = false;
+  // OpenSea's listing history: the last hours are read again each round, and once a day the last day and a half,
+  // since it can fill in late; after an outage it catches up a few hours per round
+  let added = [], listingsTime = head.listingsTime, deepRead = head.deepRead || genesis.time, failures = head.failures || 0;
   try {
+    const T = now(), deep = T - deepRead > 86400 && T - head.listingsTime < 3600;
+    const from = Math.max(genesis.time, head.listingsTime - (deep ? CONFIG.deepReread : CONFIG.reread));
+    const to = Math.min(T, Math.max(from, head.listingsTime) + CONFIG.readMax);
     const known = new Set(listings.map(l => l.h));
-    const seen = await listingHistory(Math.max(genesis.time, head.listingsTime - CONFIG.reread), now());
+    const seen = await listingHistory(from, to);
     added = seen.filter(l => !known.has(l.h) && Rules.liveFrom(l) >= genesis.time);
-    listingsTime = now();
-    read = true;
+    listingsTime = to;
+    if (deep) deepRead = T;
+    if (to < T) console.log(`catching up on OpenSea's listing history: read up to ${new Date(to * 1000).toISOString()}`);
+    failures = 0;
   } catch (e) {
+    failures++;
     console.log(`OpenSea's listing history could not be read this round (${e.message}); the next round reads it again`);
   }
   const all = (genesis.listings || []).concat(listings, added);
 
   // the chain: the moves, and the Seaport logs of every lister's wallet
-  const moves = await moveEvents(head.block + 1, block.number);
+  const recorded = new Set(events.filter(e => e.k === 'move').map(e => e.b + ':' + e.i));
+  const moves = (await moveEvents(head.block + 1, block.number)).filter(e => !recorded.has(e.b + ':' + e.i));
   const makers = new Set(all.map(l => l.maker));
   let seaport = makers.size ? await seaportLogs(head.block + 1, block.number, makers) : [];
   const late = added.filter(l => l.t < head.time);              // found late: look back for their cancellations too
@@ -462,15 +483,19 @@ async function run() {
   const chain = events.concat(moves, cancels, freshCancels);
   const kept = prune(genesis, chain, listings.concat(added), block.time);
   const after = Rules.replay(genesis, chain, kept, block.time);   // throws if anything is inconsistent
-  appendLines('events.jsonl', moves);
-  appendLines('cancels.jsonl', freshCancels);
   writeLines('listings.jsonl', kept);
-  writeJson('head.json', { block: block.number, time: block.time, listingsTime,
+  writeLines('cancels.jsonl', cancels.concat(freshCancels));
+  writeLines('events.jsonl', events.concat(moves));
+  writeJson('head.json', { block: block.number, time: block.time, listingsTime, deepRead, failures,
                            events: events.length + moves.length, cancels: cancels.length + freshCancels.length,
                            listings: kept.length });
   console.log(`block ${block.number}: ${moves.length} moves, ${freshCancels.length} on-chain cancellations of listings, ` +
               `${added.length} new listings, ${listings.length + added.length - kept.length} overlapping relistings left out; ` +
               `${after.listedCount} seekers listed; ${Rules.credits(after.total, 0)} credits exist`);
+  if (failures >= CONFIG.failAfter) {
+    console.error(`OpenSea's listing history has not been read for ${failures} rounds: marking this round failed so it shows`);
+    process.exitCode = 1;
+  }
 }
 
 async function check() {
@@ -518,7 +543,7 @@ async function verify() {
   say(start.every(l => { const o = archived.get(l.h); return o && String(o.parameters.offerer).toLowerCase() === l.maker && Number(o.parameters.endTime) === l.e; }),
       `each of them is published with its signed order (data/orders.jsonl)`);
   let all = start.concat(listings), history = null;
-  try { history = await listingHistory(genesis.time, now()); } catch (e) { console.log(`skip  OpenSea's listing history could not be read (${e.message}): checking the listings on record only`); }
+  try { history = await listingHistory(genesis.time, now()); } catch (e) { say(false, `OpenSea's listing history could not be read (${e.message}), so the listings could not be checked`); }
   if (history) {
     const settled = head.listingsTime - CONFIG.settle, atStart = new Set(start.map(l => l.h));
     const fromHistory = history.filter(l => Rules.liveFrom(l) >= genesis.time && l.t <= settled && !atStart.has(l.h));
@@ -584,16 +609,16 @@ function totals() {
 function publish(dir) {
   if (!dir) throw new Error('usage: node bot/bot.js publish DIR');
   if (!fs.existsSync(file('genesis.json'))) return console.log('no start yet: nothing to publish');
-  const { genesis, listings, head, play } = load();
+  const { genesis, head, play } = load();
   const s = play();
   const orders = new Map(readLines('orders.jsonl').map(o => [o.h, o]));
   const out = path.join(dir, 'data', 'wallets');
   fs.mkdirSync(out, { recursive: true });
-  const byMaker = new Map();
-  for (const l of (genesis.listings || []).concat(listings)) {
-    if (l.e <= s.time || s.owner[l.id] !== l.maker) continue;
+  const byMaker = new Map(), until = new Map();     // the listings live now, and when each listed seeker's last one ends
+  for (const l of s.live.values()) {
     if (!byMaker.has(l.maker)) byMaker.set(l.maker, []);
     byMaker.get(l.maker).push(l);
+    until.set(l.id, Math.max(until.get(l.id) || 0, l.e));
   }
   let holders = 0, startTotal = 0, n = 0;
   for (const x of s.accounts.values()) {
@@ -603,7 +628,7 @@ function publish(dir) {
     fs.writeFileSync(path.join(out, x.address + '.json'), JSON.stringify({
       address: x.address, time: s.time, units: x.units, unlisted: x.unlisted, held: x.held,
       start: x.start, earned: x.earned, received: x.received, sent: x.sent, adjusted: x.adjusted,
-      seekers: mine.map(m => [m.id, m.listed ? 1 : 0]), history: x.history,
+      seekers: mine.map(m => [m.id, m.listed ? until.get(m.id) : 0]), history: x.history,
       listings: (byMaker.get(x.address) || []).map(l => ({ h: l.h, id: l.id, e: l.e, order: (orders.get(l.h) || {}).parameters || null })),
     }));
     n++;

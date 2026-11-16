@@ -15,17 +15,17 @@ the same balance for every wallet, to the unit.
 
 | | |
 |---|---|
-| `data/genesis.json` | the start: its block and time, the rules' numbers, who held every seeker (from the chain), and the OpenSea listings live at that moment (read from OpenSea then; their signed orders are in `data/orders.jsonl`) |
+| `data/genesis.json` | the start: its block and time, the rules' numbers, who held every seeker (from the chain), and the OpenSea listings live at that moment (read from OpenSea then; their orders, as OpenSea served them, are in `data/orders.jsonl`) |
 | `data/events.jsonl` | every move of a seeker since the start (the chain's Transfer events, in chain order), plus any correction made by hand |
 | `data/cancels.jsonl` | the on-chain cancellations that can end a seeker listing (Seaport's `OrderCancelled` and `CounterIncremented`) |
-| `data/listings.jsonl` | every OpenSea listing of a seeker since the start, from OpenSea's listing history |
-| `data/orders.jsonl` | the signed orders behind those listings, where OpenSea still served them (an archive; the rules never read it) |
+| `data/listings.jsonl` | the OpenSea listings of seekers since the start, from OpenSea's listing history. Relistings that overlap another listing of the same seeker are left out once they end, since they change no balance (the bot only leaves them out after checking every wallet's numbers come out the same) |
+| `data/orders.jsonl` | the orders behind the listings live at the start, as OpenSea served them (without signatures; an archive, the rules never read it) |
 | `data/head.json` | how far the copy goes |
 | `data/summary.json`, `data/wallets/` | ready-made results for the page, one small file per wallet: worked out from the records above when the site is published (not kept in the repository) |
 | `rules.js` | the rules: turns the files above into every balance. Used by the bot and by the page |
 | `og.png`, `icon.png` | the picture shown when the link is shared, and the tab icon (seeker #1302, from the collection's layers) |
-| `index.html` | the page: type an address, see its balance, what it earns and its history; end your listings on-chain |
-| `bot/bot.js` | the bot. Runs every 5 minutes (`.github/workflows/credits.yml`) and only copies records |
+| `index.html` | the page: type an address, see its balance, what it earns, which seekers count as listed and until when, and its history |
+| `bot/bot.js` | the bot. Runs every 5 minutes (`.github/workflows/credits.yml`, started by `.github/workflows/timer.yml`) and only copies records |
 | `bot/test.js` | tests of the rules: `node --test bot/test.js` |
 
 Balances are stored nowhere. They are worked out from the records every time, in
@@ -57,7 +57,7 @@ top of `rules.js` and, in plain words, on the page.
 
 ## Check it yourself
 
-Needs Node 18 or newer, nothing else.
+Needs Node 18 or newer, and an OpenSea API key for `verify` (in `OPENSEA_API_KEY`); without one, `verify` fails, since it can't check the listings.
 
 ```
 node bot/bot.js verify             # rebuilds every record from the chain and OpenSea's history and compares
@@ -66,17 +66,24 @@ node bot/bot.js totals             # the whole picture
 ```
 
 `verify` rebuilds the holders at the start from every Transfer since the
-contract began, the listings live at the start and every listing since from
-OpenSea's listing history, and the moves and on-chain cancellations from the
-chain, and checks that the records are exactly these. OpenSea's history can take
-a while to fill in, so listings from the last hour may still be added; older
-ones are final.
+contract began, the moves and on-chain cancellations from the chain, and the
+listings since the start from OpenSea's listing history, and checks the records
+against them. Then it rebuilds every balance from the chain and OpenSea's full
+history and checks it equals the record's, to the unit.
+
+The one thing it can't rebuild is the listings live at the start: they were read
+from OpenSea once, at the start, and are published as read. `verify` only checks
+that each was by the seeker's holder, live at the start, and matches its
+published order. OpenSea's history can take a while to fill in, so listings from
+the last few hours may still be added (and once a day the bot re-reads the last
+day and a half).
 
 ## Running the bot
 
 `node bot/bot.js run` does one round. The first round ever makes
-`data/genesis.json`: the start, at a block an hour in the past (so OpenSea's
-history up to it has settled). On GitHub, the count only starts when the
+`data/genesis.json`: the start, at the newest block (30 blocks, a few seconds,
+behind the chain's tip), with a snapshot of the listings OpenSea showed as live
+then. On GitHub, the count only starts when the
 workflow is run by hand with "start" ticked; until then every round only runs
 the read-only `check`. The bot needs an OpenSea API
 key: set `OPENSEA_API_KEY` (in GitHub: a repository secret of that name), or

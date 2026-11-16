@@ -56,9 +56,12 @@
   input[type=text], button { height: 44px; margin: 0; border-radius: 6px; font: inherit; line-height: 20px; }
   input[type=text] { flex: 1 1 320px; min-width: 0; padding: 0 13px; border: 1px solid var(--line2); background: var(--well); color: var(--text); }
   input[type=text]:focus { outline: none; border-color: var(--muted); }
+  input[type=text]:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
+  a:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
   button { padding: 0 20px; border: 1px solid var(--text); background: var(--text); color: #0b0d13; cursor: pointer; font-weight: 700;
     font-size: 13px; letter-spacing: .12em; text-transform: uppercase; }
   button:hover, button:focus-visible { background: #ffffff; border-color: #ffffff; outline: none; }
+  button:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
   button:disabled { opacity: .45; cursor: default; }
   button { white-space: nowrap; }
   #message { margin: 12px 0 0; min-height: 0; }
@@ -100,7 +103,7 @@
   [hidden] { display: none !important; }
   /* when an address is shown, a clear break between its own panels and the rest of the page */
   #result { padding-bottom: 24px; margin-bottom: 40px; border-bottom: 1px solid var(--line2); }
-  @media (max-width: 520px) { .balance b { font-size: 38px; } td.when { white-space: normal; } button { flex: 1 1 100%; } }
+  @media (max-width: 520px) { .balance b { font-size: 38px; } td.when { white-space: normal; } button { flex: 1 1 100%; } .chip { padding: 6px 12px; } }
 </style>
 </head>
 <body>
@@ -123,7 +126,7 @@
       <input type="text" id="address" placeholder="0x… wallet address" autocomplete="off" spellcheck="false" aria-label="Wallet address">
       <button type="submit">Check</button>
     </form>
-    <p id="message" class="muted low" hidden></p>
+    <p id="message" class="muted low" role="status" aria-live="polite" hidden></p>
   </div>
 
   <div id="result" hidden>
@@ -184,7 +187,7 @@
       <dt>Earning</dt>
       <dd>Every unlisted seeker earns its owner 1 credit per day, counted by the second. Nothing to click or sign.</dd>
       <dt>What "listed" means</dt>
-      <dd>A seeker is listed from the moment its holder lists it on OpenSea (any price, private listings too) until that listing's end date, unless the seeker is sold or moved first, or the listing is cancelled on-chain. Listed seekers earn nothing.</dd>
+      <dd>A seeker is listed from the moment its holder lists it on OpenSea (or the listing's start time, if later; any price, private listings too) until that listing's end date, unless the seeker is sold or moved first, or the listing is cancelled on-chain. Listed seekers earn nothing.</dd>
       <dt>Ending a listing early</dt>
       <dd>Only an on-chain cancel ends a listing before its end date. On OpenSea that's the normal cancel, which asks you to approve a small transaction (see "How to delist" above). A cancel that doesn't go through your wallet leaves no public record, so the listing keeps counting until its end date.</dd>
       <dt>Selling and moving</dt>
@@ -194,7 +197,7 @@
       <dt>Why it works this way</dt>
       <dd>So anyone can check every number. Balances follow only from permanent public records, the chain and OpenSea's listing history, so anyone who replays them gets exactly the same result for every wallet, to the second. When the bot runs changes nothing. A cancel that doesn't go on-chain leaves no such record, which is why only on-chain cancels count.</dd>
       <dt>Check it yourself</dt>
-      <dd>This page computes every balance in your browser from public files: <a href="data/genesis.json">the start</a>, <a href="data/events.jsonl">the moves</a>, <a href="data/cancels.jsonl">the on-chain cancellations</a> and <a href="data/listings.jsonl">the listings</a>, with <a href="rules.js">one short rules file</a>. The bot only copies these records, and its verify command rebuilds them from the chain and OpenSea to prove they match<span id="repo"></span>. Listings from the last hour can still be added as OpenSea's history catches up; older records are final. Nothing in the record is ever changed or removed; a correction, if ever needed, is added as its own entry with the reason.</dd>
+      <dd>Every balance follows from public files: <a href="data/genesis.json">the start</a>, <a href="data/events.jsonl">the moves</a>, <a href="data/cancels.jsonl">the on-chain cancellations</a> and <a href="data/listings.jsonl">the listings</a>, with <a href="rules.js">one short rules file</a>. The bot runs that file on them and publishes the results this page shows; anyone who runs it on the same files gets the same numbers. Its verify command rebuilds the files from the chain and OpenSea's history and checks they match<span id="repo"></span>. The one thing it can't rebuild is the listings live at the start: they were read from OpenSea once, at the start, and are published as read. Relistings that overlap another listing of the same seeker are left out of the listings file once they end, since they change no balance. Listings from the last few hours can still be added as OpenSea's history catches up. A correction, if ever needed, is added as its own entry with the reason.</dd>
     </dl>
   </div>
 </main>
@@ -210,7 +213,9 @@ let asked = 0;            // the latest address asked for (answers to older ones
 let ticker = 0;
 
 const short = a => a.slice(0, 6) + '…' + a.slice(-4);
-const signed = units => (units > 0 ? '+' : units < 0 ? '−' : '') + R.credits(Math.abs(units));
+// credits to 2 decimals, rounded down like the live balance (never a credit before it is earned)
+const cr = units => { const h = Math.floor(Math.abs(units) * 100 / R.UNIT); return Math.floor(h / 100) + '.' + String(h % 100).padStart(2, '0'); };
+const signed = units => (units > 0 ? '+' : units < 0 ? '−' : '') + cr(units);
 const when = t => {
   const d = new Date(t * 1000), p = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
@@ -225,42 +230,52 @@ function el(tag, props, ...children) {
 const seekerLink = id => `https://opensea.io/item/robinhood/${data.sum.nft}/${id}`;
 const addressLink = a => el('a', { href: '#' + a, textContent: short(a), title: a });
 async function get(name, kind) {
-  const r = await fetch('data/' + name, { cache: 'no-cache' });
-  if (!r.ok) throw Object.assign(new Error(name), { status: r.status });
-  return r[kind]();
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch('data/' + name, { cache: 'no-cache' });
+    if (r.ok) return r[kind]();
+    // GitHub Pages answers 503 for a moment while a new version goes up
+    if (r.status !== 503 || attempt >= 3) throw Object.assign(new Error(name), { status: r.status });
+    await new Promise(done => setTimeout(done, 1500));
+  }
 }
 const wallet = address => get('wallets/' + address + '.json', 'json');
-async function load() {
-  const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = location.pathname.split('/')[1];
-  if (m && repo) $('repo').append(' (', el('a', { href: `https://github.com/${m[1]}/${repo}`, textContent: 'the code and how' }), ')');
+function status() {
+  const sum = data.sum, age = Date.now() / 1000 - sum.time, listingAge = Date.now() / 1000 - sum.listingsTime;
+  $('status').textContent = `Updated ${ago(age)} (block ${sum.block.toLocaleString('en')}). Started ${when(sum.start.time)}.`;
+  if (age > 7200) $('status').append(el('div', { className: 'warn', textContent: 'The bot hasn\'t updated for a while. The numbers will catch up when it\'s back.' }));
+  else if (listingAge > 3600) $('status').append(el('div', { className: 'warn', textContent: `Listings were last read from OpenSea ${ago(listingAge)}; sales and moves are up to date.` }));
+}
+
+async function load(again) {
   let sum;
   try {
     sum = await get('summary.json', 'json');
   } catch (e) {
+    if (again) return;
     $('status').textContent = e.status === 404 ? 'Credits have not started yet. Come back soon.' : 'The data could not be loaded. Try again in a minute.';
     return;
   }
+  const first = !data;
   data = { sum };
-  $('nTotal').textContent = Math.round(sum.totals.units / R.UNIT).toLocaleString('en');
+  $('nTotal').textContent = Math.floor(sum.totals.units / R.UNIT).toLocaleString('en');
   $('nHolders').textContent = sum.totals.holders.toLocaleString('en');
   $('nEarning').textContent = sum.totals.earning.toLocaleString('en');
   $('nListed').textContent = sum.totals.listed.toLocaleString('en');
   $('network').hidden = false;
-  const age = Date.now() / 1000 - sum.time;
-  const listingAge = Date.now() / 1000 - sum.listingsTime;
-  $('status').textContent = `Updated ${ago(age)} (block ${sum.block.toLocaleString('en')}). Started ${when(sum.start.time)}.`;
-  if (age > 7200) $('status').append(el('div', { className: 'warn', textContent: 'The bot hasn\'t updated for a while. The numbers will catch up when it\'s back.' }));
-  else if (listingAge > 7200) $('status').append(el('div', { className: 'warn', textContent: `Listings were last read from OpenSea ${ago(listingAge)}; sales and moves are up to date.` }));
+  status();
   const utc = new Date(sum.start.time * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
   $('aboutStart').textContent = `Staking started at Robinhood Chain block ${sum.start.block} (${utc}; ${when(sum.start.time)} your time). ` +
     `Every wallet holding seekers then got ${sum.rules.start} credits per seeker, capped at ${sum.rules.startMax} per wallet, so every seeker has credits behind it from the very first sale ` +
     `(${sum.start.wallets} wallets, ${Math.round(sum.start.units / R.UNIT).toLocaleString('en')} credits). ` +
     `Seekers with a live OpenSea listing at that moment (${sum.start.listed}) start as listed; the exact listings are published in the start file. Nothing before the start counts.`;
-  route();
+  if (first) route();
+  else if (!$('result').hidden && shown) show(shown, true);
 }
 
 function route() {
-  const a = decodeURIComponent(location.hash.slice(1)).trim();
+  let a = location.hash.slice(1);
+  try { a = decodeURIComponent(a); } catch (e) {}
+  a = a.trim();
   if (a) { $('address').value = a; show(a); }
 }
 
@@ -270,9 +285,9 @@ function say(text, cls) {
   $('message').className = cls || 'muted';
 }
 
-async function show(input) {
-  $('result').hidden = true;
-  clearInterval(ticker);
+let shown = '';           // the address on screen, refreshed with the data
+async function show(input, again) {
+  if (!again) $('result').hidden = true;
   const me = ++asked;
   if (!/^0x[0-9a-fA-F]{40}$/.test(input)) return say('That is not a wallet address (it starts with 0x and has 42 characters).', 'bad');
   if (!data) return say('Still loading…');
@@ -281,14 +296,16 @@ async function show(input) {
   try {
     x = await wallet(address);
   } catch (e) {
-    if (me !== asked) return;
+    if (me !== asked || again) return;
     return e.status === 404 ? say('No seekers here since the start, so no credits. A seeker bought now earns from day one and brings 7 credits from its seller.')
       : say('This wallet could not be loaded. Try again in a minute.', 'bad');
   }
   if (me !== asked) return;
   say('');
+  clearInterval(ticker);
+  shown = input;
 
-  const mine = x.seekers.map(([id, l]) => ({ id, listed: !!l }));
+  const mine = x.seekers.map(([id, l]) => ({ id, listed: !!l, until: l > 1 ? l : 0 }));
   const listed = mine.filter(m => m.listed).length, earning = mine.length - listed;
   const perDay = earning * data.sum.rules.perDay;
 
@@ -315,9 +332,10 @@ async function show(input) {
   $('seekersPanel').hidden = !mine.length;
   $('seekers').replaceChildren(...mine.map(m => el('a', {
     className: 'chip' + (m.listed ? ' listed' : ''), href: seekerLink(m.id), target: '_blank', rel: 'noopener',
-    textContent: '#' + m.id + (m.listed ? ' listed' : ''), title: m.listed ? 'Listed: earning nothing' : 'Staked: earning 1 a day',
+    textContent: '#' + m.id + (m.listed ? ' listed' + (m.until ? ' until ' + when(m.until).slice(5) : '') : ''),
+    title: m.listed ? 'Listed: earning nothing' + (m.until ? ' until ' + when(m.until) : '') : 'Staked: earning 1 a day',
   })));
-  $('seekersNote').textContent = 'green: staked, earning 1 a day. red: listed, earning nothing until the listing ends or is delisted on-chain (see "how to delist" below).';
+  $('seekersNote').textContent = 'green: staked, earning 1 a day. red: listed, earning nothing until the date shown (when its last listing ends), or until delisted on-chain (see "how to delist" below).';
   $('seekersNote').hidden = !listed;
 
   const row = (label, units, cls) => el('tr', { className: cls || '' }, el('td', { textContent: label }), el('td', { className: 'n', textContent: units }));
@@ -326,7 +344,7 @@ async function show(input) {
   if (x.received) lines.push(row('Received with seekers', signed(x.received)));
   if (x.sent) lines.push(row('Sent with seekers', signed(-x.sent)));
   if (x.adjusted) lines.push(row('Corrections', signed(x.adjusted)));
-  lines.push(row('Balance', R.credits(x.units), 'total'));
+  lines.push(row('Balance', cr(x.units), 'total'));
   $('sum').replaceChildren(...lines);
 
   const what = h => {
@@ -354,7 +372,13 @@ $('form').addEventListener('submit', e => {
   if (location.hash.slice(1) === a) show(a); else location.hash = a;
 });
 addEventListener('hashchange', route);
+{
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = location.pathname.split('/')[1];
+  if (m && repo) $('repo').append(' (', el('a', { href: `https://github.com/${m[1]}/${repo}`, textContent: 'the code and how' }), ')');
+}
 load();
+setInterval(() => data && status(), 30000);     // "updated … ago" stays true
+setInterval(() => load(true), 300000);          // and the numbers follow the bot's rounds
 </script>
 </body>
 </html>

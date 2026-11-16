@@ -8,16 +8,19 @@
      data/genesis.json   the start: its block and time, who held every seeker
                          (from the chain), and the OpenSea listings live at that
                          moment, read from OpenSea then and published with
-                         their signed orders (data/orders.jsonl)
+                         their orders as OpenSea served them (data/orders.jsonl)
      data/events.jsonl   every move of a seeker since the start (its Transfer
                          events, in chain order), plus corrections made by hand
      data/cancels.jsonl  the on-chain cancellations that can end a seeker
                          listing: Seaport's OrderCancelled for a listing in the
                          record, and CounterIncremented by a lister after one of
                          their listings was posted and before its end date
-     data/listings.jsonl every OpenSea listing of a seeker posted since the
-                         start, from OpenSea's listing history: when it was
-                         posted, by whom, and the end date it was signed with
+     data/listings.jsonl the OpenSea listings of seekers posted since the
+                         start, from OpenSea's listing history: when each was
+                         posted, by whom, and the end date it was signed with.
+                         Relistings that overlap another listing of the same
+                         seeker are left out once they end: they change no
+                         balance
    When the bot looked at any of it never matters.
 
    THE RULES
