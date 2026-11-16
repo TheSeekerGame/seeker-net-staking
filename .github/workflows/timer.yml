@@ -1,0 +1,24 @@
+# The timer: starts a round of the credits bot every 5 minutes. GitHub's own
+# schedule never fires on this repository, so this small workflow waits 5
+# minutes, starts a round, and starts itself again. It runs apart from the
+# rounds, so waiting never holds up a round or a site update.
+# To start it (once): Actions > timer > Run workflow. To stop it: cancel its run.
+name: timer
+on:
+  workflow_dispatch:
+permissions:
+  actions: write
+concurrency:
+  group: timer
+  cancel-in-progress: true
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait 5 minutes, start a round, start the timer again
+        run: |
+          sleep 300
+          gh workflow run credits.yml --repo "$GITHUB_REPOSITORY" --ref main
+          gh workflow run timer.yml --repo "$GITHUB_REPOSITORY" --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
