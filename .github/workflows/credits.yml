@@ -3,10 +3,9 @@
 #
 # Nothing counts until the start: until then every round only checks that the
 # chain and OpenSea can be read. The start is one manual run: Actions > credits
-# > Run workflow, with "start" ticked. That round fixes the start block
-# (data/start.json); the snapshot at that block (who gets 7 per seeker, which
-# listings were live) follows from public records, and from then on every round
-# counts.
+# > Run workflow, with "start" ticked. That round takes the snapshot (who holds
+# every seeker, and which OpenSea listings are live) and from then on every
+# round counts.
 name: credits
 on:
   schedule:
@@ -25,7 +24,6 @@ on:
     branches: [main]
     paths: [index.html, rules.js, og.png, icon.png]
 permissions:
-  actions: write
   contents: write
   pages: write
   id-token: write
@@ -55,7 +53,7 @@ jobs:
       - name: One round
         timeout-minutes: 30
         run: |
-          if [ -f data/genesis.json ] || [ -f data/start.json ] || [ "${{ inputs.start }}" = "true" ]; then
+          if [ -f data/genesis.json ] || [ "${{ inputs.start }}" = "true" ]; then
             node bot/bot.js run
           else
             echo "The count has not started: checking only."
@@ -64,7 +62,6 @@ jobs:
         env:
           OPENSEA_API_KEY: ${{ secrets.OPENSEA_API_KEY }}
           START: ${{ inputs.start }}
-          CREDITS_PUSH: '1'
       - name: Verify
         timeout-minutes: 30
         if: inputs.verify && hashFiles('data/genesis.json') != ''
@@ -92,10 +89,3 @@ jobs:
           path: _site
       - id: deploy
         uses: actions/deploy-pages@v5
-      # While the first read of OpenSea's history is unfinished, start the next
-      # round right away instead of waiting for the timer.
-      - name: Carry on with the first read
-        if: always() && hashFiles('data/progress.json') != '' && hashFiles('data/genesis.json') == ''
-        run: gh workflow run credits.yml --ref main
-        env:
-          GH_TOKEN: ${{ github.token }}
