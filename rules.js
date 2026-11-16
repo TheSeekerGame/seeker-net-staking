@@ -34,8 +34,8 @@
           CounterIncremented by the lister (which ends all the listings they
           posted before it).
       A listing counts only if the lister holds the seeker when it goes live.
-      OpenSea's free cancel leaves no public record of when it happened, so it
-      does not end a listing early.
+      A cancellation that doesn't go on-chain leaves no public record of when it
+      happened, so it does not end a listing early.
    4. When a seeker changes wallet (a sale or a plain transfer), 7 of the
       sender's credits go with it to the new owner (all they have, if fewer).
    5. Credits belong to an address. Nothing else creates or moves them.
