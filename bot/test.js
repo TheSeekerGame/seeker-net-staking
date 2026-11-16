@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Rules = require('../rules.js');
-const { CONFIG, listingFromEvent, seconds, snapshotListings } = require('./bot.js');
+const { CONFIG, listingFromEvent, seconds, snapshotListings, prune } = require('./bot.js');
 
 const A = '0x' + 'a'.repeat(40), B = '0x' + 'b'.repeat(40), C = '0x' + 'c'.repeat(40), D = '0x' + 'd'.repeat(40);
 const DAY = 86400, T0 = 1_800_000_000;
@@ -209,6 +209,25 @@ test('the start: OpenSea listings live at that moment, by the holder, are kept; 
     order('0x1', 1, A, T - 100, T + 100),                                  // the same order twice
   ], owners, T);
   assert.deepEqual(got, [{ h: '0x1', id: 1, maker: A, t: T - 100, s: T - 100, e: T + 100 }]);
+});
+
+test('overlapping relistings are left out, and every balance stays exactly the same', () => {
+  const g = genesis([A, A, B, C], LIVE);
+  const L = [];
+  // a bot relists seeker 1 every 20 seconds, each listing lasting 11 minutes, for 2 hours
+  for (let k = 0; k < 360; k++) L.push({ h: '0xa' + k, id: 1, maker: A, t: at(1) + k * 20, s: 0, e: at(1) + k * 20 + 660 });
+  // another relists seeker 3 the same way, and sells it half way; a third lists seeker 4 and cancels on-chain
+  for (let k = 0; k < 120; k++) L.push({ h: '0xc' + k, id: 3, maker: B, t: at(2) + k * 30, s: 0, e: at(2) + k * 30 + 900 });
+  L.push({ h: '0xd1', id: 4, maker: C, t: at(2), s: 0, e: at(9) }, { h: '0xd2', id: 4, maker: C, t: at(2) + 60, s: 0, e: at(2) + 600 });
+  const chain = [move(2.02, 3, B, D), cancel(2.003, '0xd1', C)];
+  const until = at(5);
+  const kept = prune(g, chain, L, until);
+  assert.ok(kept.length < L.length / 10, `kept ${kept.length} of ${L.length}`);
+  const numbers = s => [...s.accounts.values()].map(x => [x.address, x.units, x.earned, x.unlisted].join()).sort().join('|');
+  assert.equal(numbers(Rules.replay(g, chain, kept, until)), numbers(Rules.replay(g, chain, L, until)));
+  // listings that can still matter are always kept
+  const open = [...L, { h: '0xe1', id: 2, maker: A, t: at(4.9), s: 0, e: at(6) }];
+  assert.ok(prune(g, chain, open, until).some(l => l.h === '0xe1'));
 });
 
 // ---- reading OpenSea's history

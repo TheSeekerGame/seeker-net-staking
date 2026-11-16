@@ -68,6 +68,7 @@
     const cancelled = new Set();          // order hashes cancelled on-chain
     const counterAt = new Map();          // lister -> time of their last CounterIncremented
     const accounts = new Map();
+    const spans = new Map();              // order hash -> [live from, live until] (until null while live)
     let now = genesis.time;
 
     function account(a) {
@@ -92,6 +93,7 @@
       const l = live.get(h);
       if (!l) return;
       live.delete(h);
+      spans.get(h)[1] = now;
       liveOn[l.id].delete(h);
       if (liveOn[l.id].size === 0 && why !== 'moved') {
         const x = settle(account(owner[l.id]));
@@ -119,6 +121,7 @@
       if (liveOn[l.id].size === 0) account(l.maker).unlisted--;
       live.set(l.h, l);
       liveOn[l.id].add(l.h);
+      spans.set(l.h, [genesis.time, null]);
       steps.push({ t: l.e, phase: 0, key: l.h, end: l.h });
     }
 
@@ -155,6 +158,7 @@
         }
         live.set(l.h, l);
         liveOn[l.id].add(l.h);
+        spans.set(l.h, [now, null]);
         continue;
       }
 
@@ -195,7 +199,7 @@
     for (const x of accounts.values()) total += settle(x).units;
     const listed = new Uint8Array(N + 1);
     for (let id = 1; id <= N; id++) if (liveOn[id].size) { listed[id] = 1; listedCount++; }
-    return { time: now, accounts, owner, listed, live, total, listedCount, supply: N };
+    return { time: now, accounts, owner, listed, live, spans, total, listedCount, supply: N };
   }
 
   /** The seekers an address holds: [{id, listed}] */

@@ -323,6 +323,50 @@ function snapshotListings(orders, owners, T) {
   return [...out.values()].sort((a, b) => a.id - b.id || (a.h < b.h ? -1 : 1));
 }
 
+/** Leave out relistings that cannot matter: of a seeker's listings that have
+    ended, keep only enough to cover the same stretches of time (the rest
+    overlap them completely). Then make sure, unit for unit, that every wallet
+    comes out the same with and without the left-out ones; if not, keep all. */
+function prune(genesis, chain, listings, until) {
+  const full = Rules.replay(genesis, chain, listings, until);
+  const byId = new Map();
+  const keep = new Set();
+  for (const l of listings) {
+    const span = full.spans.get(l.h);
+    if (!span) { if (l.e > until) keep.add(l.h); continue; }        // never live: matters only if it still can be
+    if (span[1] === null || l.e > until) { keep.add(l.h); continue; }  // still live, or could still matter
+    if (!byId.has(l.id)) byId.set(l.id, []);
+    byId.get(l.id).push({ h: l.h, a: span[0], b: span[1] });
+  }
+  for (const spans of byId.values()) {                              // greedy cover of the same stretches of time
+    spans.sort((x, y) => x.a - y.a || y.b - x.b);
+    let i = 0;
+    while (i < spans.length) {
+      let reach = spans[i].b, best = spans[i];
+      const startOfStretch = spans[i].a;
+      keep.add(best.h);
+      i++;
+      for (;;) {
+        let next = null;
+        while (i < spans.length && spans[i].a <= reach) { if (!next || spans[i].b > next.b) next = spans[i]; i++; }
+        if (!next || next.b <= reach) break;
+        keep.add(next.h);
+        reach = next.b;
+      }
+      void startOfStretch;
+    }
+  }
+  const pruned = listings.filter(l => keep.has(l.h));
+  if (pruned.length === listings.length) return listings;
+  const lean = Rules.replay(genesis, chain, pruned, until);
+  const numbers = s => [...s.accounts.values()].map(x => [x.address, x.units, x.earned, x.sent, x.received, x.held, x.unlisted].join()).sort().join('|');
+  if (numbers(full) !== numbers(lean) || full.listedCount !== lean.listedCount) {
+    console.log('  relistings: leaving them all in (the shorter record would not give exactly the same numbers)');
+    return listings;
+  }
+  return pruned;
+}
+
 // ---------------------------------------------------------------- files
 
 const file = name => path.join(DATA, name);
@@ -415,22 +459,18 @@ async function run() {
   const have = new Set(cancels.map(c => c.b + ':' + c.i));
   const freshCancels = (await cancelEvents(seaport, all)).filter(c => !have.has(c.b + ':' + c.i) && have.add(c.b + ':' + c.i));
 
-  const after = Rules.replay(genesis, events.concat(moves, cancels, freshCancels), listings.concat(added), block.time);   // throws if anything is inconsistent
+  const chain = events.concat(moves, cancels, freshCancels);
+  const kept = prune(genesis, chain, listings.concat(added), block.time);
+  const after = Rules.replay(genesis, chain, kept, block.time);   // throws if anything is inconsistent
   appendLines('events.jsonl', moves);
   appendLines('cancels.jsonl', freshCancels);
-  appendLines('listings.jsonl', added);
-  if (read) {
-    try {                                                       // the archive of signed orders: nice to have
-      const archived = new Set(readLines('orders.jsonl').map(o => o.h));
-      const hashes = new Set(all.map(l => l.h));
-      appendLines('orders.jsonl', (await currentOrders()).filter(o => hashes.has(o.h) && !archived.has(o.h)));
-    } catch (e) { console.log(`the signed orders could not be archived this round (${e.message})`); }
-  }
+  writeLines('listings.jsonl', kept);
   writeJson('head.json', { block: block.number, time: block.time, listingsTime,
                            events: events.length + moves.length, cancels: cancels.length + freshCancels.length,
-                           listings: listings.length + added.length });
+                           listings: kept.length });
   console.log(`block ${block.number}: ${moves.length} moves, ${freshCancels.length} on-chain cancellations of listings, ` +
-              `${added.length} new listings; ${after.listedCount} seekers listed; ${Rules.credits(after.total, 0)} credits exist`);
+              `${added.length} new listings, ${listings.length + added.length - kept.length} overlapping relistings left out; ` +
+              `${after.listedCount} seekers listed; ${Rules.credits(after.total, 0)} credits exist`);
 }
 
 async function check() {
@@ -480,22 +520,27 @@ async function verify() {
   let all = start.concat(listings), history = null;
   try { history = await listingHistory(genesis.time, now()); } catch (e) { console.log(`skip  OpenSea's listing history could not be read (${e.message}): checking the listings on record only`); }
   if (history) {
-    const k = l => JSON.stringify([l.h, l.id, l.maker, l.t, l.s, l.e]);
     const settled = head.listingsTime - CONFIG.settle, atStart = new Set(start.map(l => l.h));
-    const want = new Map(history.filter(l => Rules.liveFrom(l) >= genesis.time && l.t <= settled && !atStart.has(l.h)).map(l => [l.h, k(l)]));
-    const have = new Map(listings.filter(l => l.t <= settled).map(l => [l.h, k(l)]));
-    const missing = [...want.keys()].filter(h => !have.has(h)), extra = [...have.keys()].filter(h => !want.has(h));
-    const changed = [...want.keys()].filter(h => have.has(h) && have.get(h) !== want.get(h));
-    say(!missing.length && !extra.length && !changed.length,
-        `the ${have.size} listings since the start on record (posted until an hour before the last read) are OpenSea's history` +
-        (missing.length + extra.length + changed.length ? `: ${missing.length} missing, ${extra.length} extra, ${changed.length} different` : ''));
-    all = start.concat(history.filter(l => Rules.liveFrom(l) >= genesis.time && l.t <= head.listingsTime && !atStart.has(l.h)));
+    const fromHistory = history.filter(l => Rules.liveFrom(l) >= genesis.time && l.t <= settled && !atStart.has(l.h));
+    const known = new Map(fromHistory.map(l => [l.h, JSON.stringify([l.id, l.maker, l.t, l.s, l.e])]));
+    const strange = listings.filter(l => l.t <= settled && known.get(l.h) !== JSON.stringify([l.id, l.maker, l.t, l.s, l.e]));
+    say(!strange.length, `every listing on record (${listings.length}) is in OpenSea's history exactly as recorded` + (strange.length ? `: ${strange.length} are not` : ''));
+    all = start.concat(fromHistory, listings.filter(l => l.t > settled && !known.has(l.h)));
   }
+  // the on-chain cancellations, re-read from the chain for every listing (recorded or not)
   const makers = new Set(all.map(l => l.maker));
   const chainCancels = makers.size ? await cancelEvents(await seaportLogs(genesis.block + 1, head.block, makers), all) : [];
   const ck = c => JSON.stringify([c.k, c.t, c.b, c.i, c.h, c.a, c.tx]);
-  const recorded = [...cancels].sort((a, b) => a.b - b.b || a.i - b.i);
-  say(same(recorded, chainCancels, ck), `the ${cancels.length} on-chain cancellations on record are exactly the chain's (${chainCancels.length}) for those listings`);
+  const real = new Set(chainCancels.map(ck));
+  say(cancels.every(c => real.has(ck(c))), `the ${cancels.length} on-chain cancellations on record are all real (the chain has ${chainCancels.length} for these listings)`);
+  if (history) {
+    // end to end: everything rebuilt from the chain and OpenSea's full history, against the record
+    const rebuilt = Rules.replay(genesis, moves.concat(fixes, chainCancels), all.filter(l => !(genesis.listings || []).some(x => x.h === l.h)), head.time);
+    const recordOnly = play();
+    const numbers = x => [...x.accounts.values()].map(y => [y.address, y.units].join()).sort().join('|');
+    say(numbers(rebuilt) === numbers(recordOnly), `every wallet's balance rebuilt from the chain and OpenSea's full history equals the record's, to the unit` +
+        ` (${all.length - start.length} listings since the start in the history; the record keeps ${listings.length}, leaving out overlapping relistings)`);
+  }
   try {
     const s = play();
     let made = 0, started = 0;
@@ -571,7 +616,7 @@ function publish(dir) {
   console.log(`published ${n} wallets and the summary at block ${head.block}`);
 }
 
-module.exports = { CONFIG, TOPIC, blockAt, blockBefore, ownersAt, moveEvents, cancelEvents, listingFromEvent, seconds, snapshotListings };
+module.exports = { CONFIG, TOPIC, blockAt, blockBefore, ownersAt, moveEvents, cancelEvents, listingFromEvent, seconds, snapshotListings, prune };
 
 if (require.main === module) {
   const [command, argument] = process.argv.slice(2);
