@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SEEKER NET staking</title>
+<meta name="description" content="Check an address's SEEKER NET credits: the balance, what it earns per day and everything that changed it.">
+<meta name="theme-color" content="#0f0e16">
+<style>
+  /* The first layout, in The Seeker's dark, quiet colors: black ground, hairline
+     panels, white for what matters, gold kept for the balance. */
+  :root {
+    --bg: #060607; --panel: #0d0d0f; --well: #080809; --line: #1f1f24; --line2: #2c2c33; --text: #ececef; --muted: #7a7a84;
+    --accent: #ececef; --pale: #ffffff; --gold: #e3cf8e; --warn: #b9a87b; --bad: #e8857a; --pos: #abe3d9;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); color-scheme: dark; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  main { max-width: 760px; margin: 0 auto; padding: 36px 16px 80px; }
+  h1 { font-size: 26px; letter-spacing: .08em; margin: 0 0 4px; }
+  h1 span { color: var(--muted); }
+  /* every label is in capitals (.cap), every short line of words in lower case (.low);
+     only the five rules keep the wording they were written in */
+  h2, .cap { font-size: 13px; line-height: 17.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+  h2 { margin: 0 0 12px; text-indent: -0.5px; }
+  .low { text-transform: lowercase; }
+  p { margin: 0 0 12px; }
+  a { color: var(--accent); text-decoration-color: var(--line2); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: var(--accent); }
+  .muted { color: var(--muted); }
+  /* the space inside a panel is measured to the letters themselves: the first line is trimmed to the
+     top of its capitals and the last to its baseline, so 18px means 18px of empty panel on every side */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; margin: 0 0 16px;
+    text-box: trim-both cap alphabetic; }
+  .rules { list-style: none; margin: 0; padding: 0; }
+  .rules li { padding: 5px 0 5px 34px; position: relative; }
+  .rules li:first-child { padding-top: 0; } .rules li:last-child { padding-bottom: 0; }
+  .rules li span { position: absolute; left: 0; }
+  form { display: flex; gap: 10px; flex-wrap: wrap; }
+  input[type=text], button { height: 44px; margin: 0; border-radius: 6px; font: inherit; line-height: 20px; }
+  input[type=text] { flex: 1 1 320px; min-width: 0; padding: 0 13px; border: 1px solid var(--line2); background: var(--well); color: var(--text); }
+  input[type=text]:focus { outline: none; border-color: var(--muted); }
+  button { padding: 0 20px; border: 1px solid var(--text); background: var(--text); color: #0b0d13; cursor: pointer; font-weight: 700;
+    font-size: 13px; letter-spacing: .12em; text-transform: uppercase; }
+  button:hover, button:focus-visible { background: #ffffff; border-color: #ffffff; outline: none; }
+  button:disabled { opacity: .45; cursor: default; }
+  button { white-space: nowrap; }
+  #message { margin: 12px 0 0; min-height: 0; }
+  .bad { color: var(--bad); } .warn { color: var(--warn); } .ok { color: var(--pos); }
+  .balance { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 0 0 4px; }
+  /* the big digits' own side space pulled back, so their ink starts on the same line as everything else */
+  .balance b { font-size: 46px; line-height: 1.1; color: var(--gold); font-variant-numeric: tabular-nums; margin-left: -0.043em; }
+  .balance b small { font-size: 24px; color: var(--warn); }
+  .address { word-break: break-all; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 16px 0 0; }
+  .tile { border: 1px solid var(--line); background: var(--well); border-radius: 6px; padding: 11px 12px 9px;
+    display: flex; flex-direction: column; justify-content: space-between; gap: 6px; }
+  .tile b { display: block; font-size: 20px; line-height: 26px; font-variant-numeric: tabular-nums; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { border: 1px solid var(--line2); color: var(--text); background: var(--well); border-radius: 999px; padding: 1px 10px; text-decoration: none; font-size: 13px; }
+  .chip.listed { border-color: #4a4230; color: var(--warn); }
+  .chip:hover, .chip:focus-visible { border-color: var(--muted); color: var(--pale); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  td, th { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child, th:first-child { padding-left: 0; }
+  td:last-child, th:last-child { padding-right: 0; }
+  tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-weight: 400; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+  td.n, th.n { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td.when { white-space: nowrap; color: var(--muted); }
+  .sum td { border-bottom: 0; padding-top: 4px; padding-bottom: 4px; }
+  .sum td:first-child { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .sum tr:last-child td, #activity tr:last-child td { padding-bottom: 0; text-box-trim: trim-end; text-box-edge: cap alphabetic; }
+  .sum tr.total td { border-top: 1px solid var(--line); font-weight: 700; padding-top: 9px; color: var(--text); }
+  /* room below the last row for letters that hang under the line (g, y), given back underneath */
+  .endRow { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  #endStatus { flex: 1 1 260px; }
+  .scroll { max-height: 420px; overflow: auto; scrollbar-color: var(--line) transparent; padding-bottom: 5px; margin-bottom: -5px; }
+  dl { margin: 0; }
+  dt { color: var(--text); margin: 16px 0 4px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+  dd { color: #a9a9b2; }
+  dt:first-child { margin-top: 0; }
+  dd { margin: 0; }
+  [hidden] { display: none !important; }
+  @media (max-width: 520px) { .balance b { font-size: 38px; } td.when { white-space: normal; } button { flex: 1 1 100%; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>SEEKER NET <span>STAKING</span></h1>
+  <p class="muted low">hold seekers, keep them unlisted, earn credits.</p>
+
+  <div class="panel">
+    <ul class="rules">
+      <li><span>🪙</span>every unlisted seeker earns 1 credit per day</li>
+      <li><span>🗳️</span>credits accumulate on your address (not tradable)</li>
+      <li><span>🔀</span>selling / moving transfers 7 credits to new owner</li>
+      <li><span>🔥</span>spend credits on rare traits in THE FORGE (coming soon)</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h2>Check an address</h2>
+    <form id="form">
+      <input type="text" id="address" placeholder="0x… wallet address" autocomplete="off" spellcheck="false" aria-label="Wallet address">
+      <button type="submit">Check</button>
+    </form>
+    <p id="message" class="muted low" hidden></p>
+  </div>
+
+  <div id="result" hidden>
+    <div class="panel">
+      <h2>Balance</h2>
+      <div class="balance"><b><span id="balance"></span><small id="fraction"></small></b><span class="cap">credits</span></div>
+      <div id="rate" class="low"></div>
+      <div class="muted address" id="who"></div>
+      <div class="tiles">
+        <div class="tile"><span class="cap">seekers held</span><b id="held"></b></div>
+        <div class="tile"><span class="cap">earning</span><b id="earning" class="ok"></b></div>
+        <div class="tile"><span class="cap">listed</span><b id="listedCount"></b></div>
+      </div>
+    </div>
+
+    <div class="panel" id="seekersPanel">
+      <h2>Seekers</h2>
+      <div class="chips" id="seekers"></div>
+      <p class="muted low" id="seekersNote" style="margin:12px 0 0"></p>
+    </div>
+
+    <div class="panel">
+      <h2>Where the balance comes from</h2>
+      <table class="sum"><tbody id="sum"></tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>Activity</h2>
+      <div class="scroll"><table><thead><tr><th>When</th><th>What</th><th class="n">Credits</th></tr></thead><tbody id="activity" class="low"></tbody></table></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Right now</h2>
+    <div id="status" class="muted">Loading…</div>
+    <div class="tiles" id="network" hidden>
+      <div class="tile"><span class="cap">all credits</span><b id="nTotal"></b></div>
+      <div class="tile"><span class="cap">holders</span><b id="nHolders"></b></div>
+      <div class="tile"><span class="cap">earning</span><b id="nEarning" class="ok"></b></div>
+      <div class="tile"><span class="cap">listed</span><b id="nListed"></b></div>
+    </div>
+  </div>
+
+  <div class="panel" id="endPanel">
+    <h2>Force-cancel all listings</h2>
+    <p class="muted" style="margin:0 0 14px">Delisting on OpenSea is not enough: its quick cancel happens off-chain and leaves no public record, so your listing keeps counting until its end date. This button cancels it on-chain instead: one transaction, approved in your wallet, for your SEEKER NET listings only (nothing in other collections is touched). It costs a fraction of a cent, and your seekers earn again right away.</p>
+    <div class="endRow"><button type="button" id="endAll">Force-cancel all listings</button><span id="endStatus" class="muted"></span></div>
+  </div>
+
+  <div class="panel">
+    <h2>How it works, exactly</h2>
+    <dl>
+      <dt>The start</dt>
+      <dd id="aboutStart">Every wallet holding seekers at the start got 7 credits per seeker, capped at 100 per wallet, so every seeker has credits behind it from the very first sale. Nothing before the start counts.</dd>
+      <dt>Earning</dt>
+      <dd>Every unlisted seeker earns its owner 1 credit per day, counted by the second. Nothing to click or sign.</dd>
+      <dt>What "listed" means</dt>
+      <dd>A seeker is listed from the moment its holder lists it on OpenSea (any price, private listings too) until that listing's end date, unless the seeker is sold or moved first, or the listing is cancelled on-chain. Listed seekers earn nothing.</dd>
+      <dt>Ending a listing early</dt>
+      <dd>Delisting on OpenSea is not enough. OpenSea's quick cancel happens off-chain and leaves no public record, so the listing keeps counting until its end date. To stop it sooner, use "Force-cancel all listings" above, or pick a short duration when you list.</dd>
+      <dt>Selling and moving</dt>
+      <dd>When a seeker changes wallet (a sale, a gift, or a move between your own wallets), 7 credits go from the sender to the new owner, or all the sender has if fewer. Moves count in chain order: a wallet with 10 credits that sells two seekers gives 7, then 3. Flipping costs nothing: you get 7 when you buy and pass 7 on when you sell.</dd>
+      <dt>Where credits come from</dt>
+      <dd>Only from the start and from unlisted seekers. Moves just hand credits over. Credits can't be sent on their own and never go below zero.</dd>
+      <dt>Why it works this way</dt>
+      <dd>So anyone can check every number. Balances follow only from permanent public records, the chain and OpenSea's listing history, so anyone who replays them gets exactly the same result for every wallet, to the second. When the bot runs changes nothing. OpenSea's quick cancel leaves no such record, which is why it can't count.</dd>
+      <dt>Check it yourself</dt>
+      <dd>This page computes every balance in your browser from public files: <a href="data/genesis.json">the start</a>, <a href="data/events.jsonl">the moves</a>, <a href="data/cancels.jsonl">the on-chain cancellations</a> and <a href="data/listings.jsonl">the listings</a>, with <a href="rules.js">one short rules file</a>. The bot only copies these records, and its verify command rebuilds them from the chain and OpenSea to prove they match<span id="repo"></span>. Listings from the last hour can still be added as OpenSea's history catches up; older records are final. Nothing in the record is ever changed or removed; a correction, if ever needed, is added as its own entry with the reason.</dd>
+    </dl>
+  </div>
+</main>
+
+<script src="rules.js"></script>
+<script>
+'use strict';
+const R = SeekerCredits;
+const EXPLORER = 'https://robinhoodchain.blockscout.com';
+const $ = id => document.getElementById(id);
+let data = null;          // { genesis, state, head }
+let ticker = 0;
+
+const short = a => a.slice(0, 6) + '…' + a.slice(-4);
+const signed = units => (units > 0 ? '+' : units < 0 ? '−' : '') + R.credits(Math.abs(units));
+const when = t => {
+  const d = new Date(t * 1000), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+const ago = seconds => seconds < 90 ? 'a minute ago' : seconds < 5400 ? Math.round(seconds / 60) + ' minutes ago'
+  : seconds < 172800 ? Math.round(seconds / 3600) + ' hours ago' : Math.round(seconds / 86400) + ' days ago';
+function el(tag, props, ...children) {
+  const e = Object.assign(document.createElement(tag), props || {});
+  for (const c of children) e.append(c);
+  return e;
+}
+const seekerLink = id => `https://opensea.io/item/robinhood/${data.genesis.nft}/${id}`;
+const addressLink = a => el('a', { href: '#' + a, textContent: short(a), title: a });
+
+async function load() {
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = location.pathname.split('/')[1];
+  if (m && repo) $('repo').append(' (', el('a', { href: `https://github.com/${m[1]}/${repo}`, textContent: 'the code and how' }), ')');
+  const get = async (name, kind) => {
+    const r = await fetch('data/' + name, { cache: 'no-cache' });
+    if (!r.ok) throw Object.assign(new Error(name), { status: r.status });
+    return r[kind]();
+  };
+  const lines = name => get(name, 'text').catch(e => { if (e.status === 404) return ''; throw e; });
+  let genesis, events, cancels, listings, head, orders = [];
+  try {
+    genesis = await get('genesis.json', 'json');
+  } catch (e) {
+    const at = e.status === 404 ? await get('start.json', 'json').catch(() => null) : null;
+    if (at) {
+      const utc = new Date(at.time * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+      $('status').textContent = `Staking started at block ${at.block} (${utc}). Balances will show here soon.`;
+      $('aboutStart').textContent = `Staking started at Robinhood Chain block ${at.block} (${utc}; ${when(at.time)} your time). ` +
+        `Every wallet holding seekers then gets 7 credits per seeker, capped at 100 per wallet, so every seeker has credits behind it from the very first sale. Nothing before the start counts.`;
+      return say('staking has started. balances will show here soon, counted from the start.');
+    }
+    $('status').textContent = e.status === 404 ? 'Credits have not started yet. Come back soon.' : 'The data could not be loaded. Try again in a minute.';
+    return;
+  }
+  try {
+    [events, cancels, listings, head] = await Promise.all([get('events.jsonl', 'text'), lines('cancels.jsonl'), lines('listings.jsonl'), get('head.json', 'json')]);
+    orders = R.parseLines(await lines('orders.jsonl'));
+  } catch (e) {
+    $('status').textContent = 'The data could not be loaded. Try again in a minute.';
+    return;
+  }
+  // the record may be a moment ahead of the notes: only use what the notes cover
+  const chain = R.parseLines(events).concat(R.parseLines(cancels)).filter(e => e.t <= head.time);
+  listings = R.parseLines(listings);
+  const state = R.replay(genesis, chain, listings, head.time);
+  data = { genesis, state, head, listings: (genesis.listings || []).concat(listings), orders };
+
+  let holders = 0, startTotal = 0;
+  for (const x of state.accounts.values()) { if (x.held) holders++; startTotal += x.start; }
+  $('nTotal').textContent = Math.round(state.total / R.UNIT).toLocaleString('en');
+  $('nHolders').textContent = holders.toLocaleString('en');
+  $('nEarning').textContent = (state.supply - state.listedCount).toLocaleString('en');
+  $('nListed').textContent = state.listedCount.toLocaleString('en');
+  $('network').hidden = false;
+  const age = Date.now() / 1000 - head.time;
+  const listingAge = Date.now() / 1000 - head.listingsTime;
+  $('status').textContent = `Updated ${ago(age)} (block ${head.block.toLocaleString('en')}). Started ${when(genesis.time)}.`;
+  if (age > 7200) $('status').append(el('div', { className: 'warn', textContent: 'The bot hasn\'t updated for a while. The numbers will catch up when it\'s back.' }));
+  else if (listingAge > 7200) $('status').append(el('div', { className: 'warn', textContent: `Listings were last read from OpenSea ${ago(listingAge)}; sales and moves are up to date.` }));
+  const utc = new Date(genesis.time * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  $('aboutStart').textContent = `Staking started at Robinhood Chain block ${genesis.block} (${utc}; ${when(genesis.time)} your time). ` +
+    `Every wallet holding seekers then got ${genesis.rules.start} credits per seeker, capped at ${genesis.rules.startMax} per wallet, so every seeker has credits behind it from the very first sale ` +
+    `(${genesis.holders.length} wallets, ${Math.round(startTotal / R.UNIT).toLocaleString('en')} credits). Nothing before the start counts.`;
+  route();
+}
+
+function route() {
+  const a = decodeURIComponent(location.hash.slice(1)).trim();
+  if (a) { $('address').value = a; show(a); }
+}
+
+function say(text, cls) {
+  $('message').hidden = !text;
+  $('message').textContent = text || '';
+  $('message').className = cls || 'muted';
+}
+
+function show(input) {
+  $('result').hidden = true;
+  clearInterval(ticker);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(input)) return say('That is not a wallet address (it starts with 0x and has 42 characters).', 'bad');
+  if (!data) return say('Still loading…');
+  const address = input.toLowerCase();
+  const x = data.state.accounts.get(address);
+  if (!x) return say('No seekers here since the start, so no credits. A seeker bought now earns from day one and brings 7 credits from its seller.');
+  say('');
+
+  const mine = R.seekersOf(data.state, address);
+  const listed = mine.filter(m => m.listed).length, earning = mine.length - listed;
+  const perDay = earning * data.genesis.rules.perDay;
+
+  // the balance keeps growing between the bot's reports: show it live, to 2 decimals
+  // (rounded down, so it never shows a credit before it is earned)
+  const live = Date.now() / 1000 - data.head.time < 7200;
+  const tick = () => {
+    const since = live ? Math.max(0, Date.now() / 1000 - data.state.time) : 0;
+    const hundredths = Math.floor((x.units + since * perDay) * 100 / R.UNIT);
+    $('balance').textContent = Math.floor(hundredths / 100).toLocaleString('en');
+    $('fraction').textContent = '.' + String(hundredths % 100).padStart(2, '0');
+  };
+  tick();
+  if (live && perDay) ticker = setInterval(tick, 1000);
+
+  $('rate').textContent = perDay ? `earning ${perDay} a day` : mine.length ? 'earning nothing: every seeker here is listed' : 'earning nothing: no seekers here now';
+  $('rate').className = perDay ? 'ok' : 'warn';
+  $('who').textContent = address;
+  $('held').textContent = mine.length;
+  $('earning').textContent = earning;
+  $('listedCount').textContent = listed;
+  $('listedCount').className = listed ? 'warn' : '';
+
+  $('seekersPanel').hidden = !mine.length;
+  $('seekers').replaceChildren(...mine.map(m => el('a', {
+    className: 'chip' + (m.listed ? ' listed' : ''), href: seekerLink(m.id), target: '_blank', rel: 'noopener',
+    textContent: '#' + m.id + (m.listed ? ' listed' : ''), title: m.listed ? 'Listed: earning nothing' : 'Earning 1 a day',
+  })));
+  $('seekersNote').textContent = 'white: earning. gold: listed, earning nothing until the listing ends or is force-cancelled (see below).';
+  $('seekersNote').hidden = !listed;
+
+  const row = (label, units, cls) => el('tr', { className: cls || '' }, el('td', { textContent: label }), el('td', { className: 'n', textContent: units }));
+  const lines = [row(x.start ? 'Start' : 'Start (no seekers then)', signed(x.start) || '0.00'),
+                 row('Earned by holding', signed(x.earned) || '0.00')];
+  if (x.received) lines.push(row('Received with seekers', signed(x.received)));
+  if (x.sent) lines.push(row('Sent with seekers', signed(-x.sent)));
+  if (x.adjusted) lines.push(row('Corrections', signed(x.adjusted)));
+  lines.push(row('Balance', R.credits(x.units), 'total'));
+  $('sum').replaceChildren(...lines);
+
+  const what = h => {
+    const seeker = h.id ? el('a', { href: seekerLink(h.id), target: '_blank', rel: 'noopener', textContent: '#' + h.id }) : '';
+    const tx = h.tx ? el('a', { href: `${EXPLORER}/tx/${h.tx}`, target: '_blank', rel: 'noopener', textContent: 'tx', className: 'muted' }) : '';
+    if (h.k === 'start') return ['start: ' + h.n + ' seeker' + (h.n === 1 ? '' : 's') + ' held'];
+    if (h.k === 'list') return ['listed ', seeker, ' until ' + when(h.until) + ': not earning'];
+    if (h.k === 'unlist') return [seeker, h.why === 'cancelled' ? ' listing cancelled on-chain: earning again' : ' listing ended: earning again'];
+    if (h.k === 'out') return ['sent ', seeker, ' to ', addressLink(h.who), h.d ? '' : ' (no credits to send)', ' ', tx];
+    if (h.k === 'in') return ['got ', seeker, ' from ', addressLink(h.who), h.d ? '' : ' (sender had no credits)', ' ', tx];
+    if (h.k === 'adjust') return ['Correction: ' + (h.note || '')];
+    return [h.k];
+  };
+  $('activity').replaceChildren(...x.history.slice().reverse().map(h => el('tr', null,
+    el('td', { className: 'when', textContent: when(h.t) }),
+    el('td', null, ...what(h)),
+    el('td', { className: 'n ' + (h.d > 0 ? 'ok' : h.d < 0 ? 'bad' : 'muted'), textContent: h.d ? signed(h.d) : '' }))));
+  $('result').hidden = false;
+}
+
+// Force-cancel all listings: Seaport's cancel() for exactly this wallet's SEEKER NET
+// listings, rebuilt from the signed orders the bot archives (data/orders.jsonl)
+const SEAPORT = '0x0000000000000068F116a894984e2DB1123eB395';
+const RPC = 'https://rpc.mainnet.chain.robinhood.com';
+const CHAIN = { chainId: '0x1237', chainName: 'Robinhood Chain', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: [RPC], blockExplorerUrls: [EXPLORER] };
+const ITEM = '(uint8 itemType,address token,uint256 identifierOrCriteria,uint256 startAmount,uint256 endAmount)';
+const CITEM = '(uint8 itemType,address token,uint256 identifierOrCriteria,uint256 startAmount,uint256 endAmount,address recipient)';
+const ORDER = `(address offerer,address zone,${ITEM}[] offer,${CITEM}[] consideration,uint8 orderType,uint256 startTime,uint256 endTime,bytes32 zoneHash,uint256 salt,bytes32 conduitKey,uint256 counter)`;
+async function loadEthers() {
+  if (window.ethers) return window.ethers;
+  await new Promise((ok, fail) => {
+    const tag = Object.assign(document.createElement('script'), { src: 'https://cdnjs.cloudflare.com/ajax/libs/ethers/6.17.0/ethers.umd.min.js' });
+    tag.onload = ok; tag.onerror = () => fail(new Error('the signing library could not be loaded'));
+    document.head.append(tag);
+  });
+  return window.ethers;
+}
+const components = p => ({ offerer: p.offerer, zone: p.zone,
+  offer: p.offer.map(i => ({ itemType: i.itemType, token: i.token, identifierOrCriteria: i.identifierOrCriteria, startAmount: i.startAmount, endAmount: i.endAmount })),
+  consideration: p.consideration.map(i => ({ itemType: i.itemType, token: i.token, identifierOrCriteria: i.identifierOrCriteria, startAmount: i.startAmount, endAmount: i.endAmount, recipient: i.recipient })),
+  orderType: p.orderType, startTime: p.startTime, endTime: p.endTime, zoneHash: p.zoneHash, salt: p.salt, conduitKey: p.conduitKey, counter: p.counter });
+async function chainCall(to, input) {
+  const r = await (await fetch(RPC, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to, data: input }, 'latest'] }) })).json();
+  if (!r.result) throw new Error('the chain did not answer');
+  return r.result;
+}
+async function endAll() {
+  const out = $('endStatus'), button = $('endAll');
+  const tell = (text, cls) => { out.textContent = text; out.className = cls || 'muted'; };
+  if (!window.ethereum) return tell('No wallet found. Open this page in a browser with a wallet such as MetaMask.', 'bad');
+  if (!data) return tell('Available once balances are showing.', 'bad');
+  button.disabled = true;
+  try {
+    const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    const from = account.toLowerCase();
+    // this wallet's SEEKER NET listings that can still count: before their end date, on seekers it holds
+    const held = new Set(R.seekersOf(data.state, from).map(m => m.id));
+    const nowS = Date.now() / 1000;
+    const mine = data.listings.filter(l => l.maker === from && l.e > nowS && held.has(l.id));
+    if (!mine.length) return tell('This wallet has no SEEKER NET listings counting right now. Listed in the last 15 minutes? Try again after the next update.');
+    const ethers = await loadEthers();
+    const seaport = new ethers.Interface([`function cancel(${ORDER}[] orders) returns (bool)`, `function getOrderHash(${ORDER} order) view returns (bytes32)`]);
+    const byHash = new Map(data.orders.map(o => [o.h, o]));
+    const ready = [], missing = [];
+    for (const l of mine) {
+      const o = byHash.get(l.h);
+      if (!o || !o.parameters) { missing.push(l); continue; }
+      const c = components(o.parameters);
+      const h = seaport.decodeFunctionResult('getOrderHash', await chainCall(SEAPORT, seaport.encodeFunctionData('getOrderHash', [c])))[0];
+      if (h.toLowerCase() === l.h) ready.push([l, c]); else missing.push(l);    // only orders that are exactly the listing on record
+    }
+    if (!ready.length) return tell(`Not ready yet for ${missing.map(l => '#' + l.id).join(', ')}: the bot saves new listings within 15 minutes. Try again then.`, 'bad');
+    try {
+      await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: CHAIN.chainId }] });
+    } catch (e) {
+      if (e.code !== 4902) throw e;
+      await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [CHAIN] });
+    }
+    const which = ready.map(([l]) => '#' + l.id).join(', ');
+    tell(`Approve in your wallet: cancels the listing${ready.length === 1 ? '' : 's'} of ${which}…`);
+    const tx = await window.ethereum.request({ method: 'eth_sendTransaction', params: [{ from: account, to: SEAPORT, data: seaport.encodeFunctionData('cancel', [ready.map(([, c]) => c)]) }] });
+    tell('Sent. Waiting for confirmation…');
+    const later = missing.length ? ` ${missing.map(l => '#' + l.id).join(', ')} wasn't ready yet: try again in 15 minutes.` : '';
+    for (let n = 0; n < 120; n++) {
+      const r = await window.ethereum.request({ method: 'eth_getTransactionReceipt', params: [tx] });
+      if (r) {
+        out.replaceChildren(r.status === '0x1' ? `Done: ${which} cancelled on-chain. The page shows it after its next update.${later} ` : 'The transaction failed. ',
+          el('a', { href: `${EXPLORER}/tx/${tx}`, target: '_blank', rel: 'noopener', textContent: 'See it on the explorer' }));
+        out.className = r.status === '0x1' ? 'ok' : 'bad';
+        return;
+      }
+      await new Promise(f => setTimeout(f, 2000));
+    }
+    out.replaceChildren('Sent, not confirmed yet. ', el('a', { href: `${EXPLORER}/tx/${tx}`, target: '_blank', rel: 'noopener', textContent: 'Check it on the explorer' }));
+  } catch (e) {
+    tell(e.code === 4001 ? 'Cancelled in the wallet: nothing was sent.' : 'It did not go through: ' + (e.message || e), e.code === 4001 ? 'muted' : 'bad');
+  } finally {
+    button.disabled = false;
+  }
+}
+$('endAll').addEventListener('click', endAll);
+
+$('form').addEventListener('submit', e => {
+  e.preventDefault();
+  const a = $('address').value.trim();
+  if (location.hash.slice(1) === a) show(a); else location.hash = a;
+});
+addEventListener('hashchange', route);
+load();
+</script>
+</body>
+</html>

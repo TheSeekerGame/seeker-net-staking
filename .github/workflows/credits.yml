@@ -1,0 +1,87 @@
+# One round of the credits bot a few times an hour: read the chain and OpenSea,
+# add the new events to data/, save them in the repository and publish the site.
+#
+# Nothing counts until the start: until then every round only checks that the
+# chain and OpenSea can be read. The start is one manual run: Actions > credits
+# > Run workflow, with "start" ticked. That round fixes the start block
+# (data/start.json); the snapshot at that block (who gets 7 per seeker, which
+# listings were live) follows from public records, and from then on every round
+# counts.
+name: credits
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      start:
+        description: 'Start the count now (takes the snapshot; only works once)'
+        type: boolean
+        default: false
+      verify:
+        description: 'Also rebuild every record from the chain and OpenSea and compare'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: [index.html, rules.js]
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: credits
+  cancel-in-progress: false
+jobs:
+  round:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      # Without an OPENSEA_API_KEY secret the bot uses one of OpenSea's free
+      # 7-day keys; it is kept between rounds here, outside the repository.
+      - id: key
+        uses: actions/cache/restore@v6
+        with:
+          path: .opensea-key.json
+          key: opensea-key-none
+          restore-keys: opensea-key-
+      - name: One round
+        run: |
+          if [ -f data/genesis.json ] || [ -f data/start.json ] || [ "${{ inputs.start }}" = "true" ]; then
+            node bot/bot.js run
+          else
+            echo "The count has not started: checking only."
+            node bot/bot.js check
+          fi
+        env:
+          OPENSEA_API_KEY: ${{ secrets.OPENSEA_API_KEY }}
+          START: ${{ inputs.start }}
+      - name: Verify
+        if: inputs.verify && hashFiles('data/genesis.json') != ''
+        run: node bot/bot.js verify
+        env:
+          OPENSEA_API_KEY: ${{ secrets.OPENSEA_API_KEY }}
+      - if: always() && hashFiles('.opensea-key.json') != '' && steps.key.outputs.cache-matched-key != format('opensea-key-{0}', hashFiles('.opensea-key.json'))
+        uses: actions/cache/save@v6
+        with:
+          path: .opensea-key.json
+          key: opensea-key-${{ hashFiles('.opensea-key.json') }}
+      - name: Save the record
+        run: |
+          git config user.name "seeker-credits-bot"
+          git config user.email "seeker-credits-bot@users.noreply.github.com"
+          mkdir -p data
+          git add data
+          git diff --cached --quiet || git commit -q -m "round: block $(node -p "try { require('./data/head.json').block } catch { 'start ' + require('./data/start.json').block }")"
+          git pull -q --rebase
+          git push -q
+      - name: The site
+        run: mkdir -p _site data && cp -r index.html rules.js data _site/
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v5
