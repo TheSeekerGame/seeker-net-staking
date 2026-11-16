@@ -223,6 +223,7 @@ function el(tag, props, ...children) {
   return e;
 }
 const seekerLink = id => `https://opensea.io/item/robinhood/${data.sum.nft}/${id}`;
+const addressLink = a => el('a', { href: '#' + a, textContent: short(a), title: a });
 async function get(name, kind) {
   const r = await fetch('data/' + name, { cache: 'no-cache' });
   if (!r.ok) throw Object.assign(new Error(name), { status: r.status });
