@@ -442,10 +442,10 @@ async function check() {
   const cancels = await seaportLogs(hourAgo.number, latest.number, null);
   const held = new Set(owners);
   console.log(`chain: ${cancels.length} Seaport cancellations in the last hour, ${cancels.filter(l => held.has(addr(l.topics[1]))).length} by seeker holders`);
-  const r = await opensea(`/events/collection/${CONFIG.slug}?event_type=listing&limit=3&after=${now() - 7 * 86400}&before=${now()}`);
+  const r = await opensea(`/events/collection/${CONFIG.slug}?event_type=listing&limit=3&after=${now() - 86400}&before=${now()}`);
   console.log('opensea: a raw listing event, as OpenSea sends it:\n' + JSON.stringify((r.asset_events || [])[0] || r).slice(0, 1500));
-  const week = await listingHistory(now() - 7 * 86400, now());
-  console.log(`opensea: ${week.length} listings of seekers posted in the last 7 days`);
+  const week = await listingHistory(now() - 86400, now());
+  console.log(`opensea: ${week.length} listings of seekers posted in the last day`);
   const T = now();
   const liveNow = week.filter(l => Rules.liveFrom(l) <= T && l.e > T && owners[l.id - 1] === l.maker);
   console.log(`opensea: of those, ${new Set(liveNow.map(l => l.id)).size} seekers have one that is before its end date and by the holder`);
