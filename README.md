@@ -15,7 +15,7 @@ the same balance for every wallet, to the unit.
 
 | | |
 |---|---|
-| `data/genesis.json` | the start: its block and time, the rules' numbers, who held every seeker, and the OpenSea listings live at that moment |
+| `data/genesis.json` | the start: its block and time, the rules' numbers, who held every seeker (from the chain), and the OpenSea listings live at that moment (read from OpenSea then; their signed orders are in `data/orders.jsonl`) |
 | `data/events.jsonl` | every move of a seeker since the start (the chain's Transfer events, in chain order), plus any correction made by hand |
 | `data/cancels.jsonl` | the on-chain cancellations that can end a seeker listing (Seaport's `OrderCancelled` and `CounterIncremented`) |
 | `data/listings.jsonl` | every OpenSea listing of a seeker since the start, from OpenSea's listing history |

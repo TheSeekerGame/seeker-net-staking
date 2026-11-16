@@ -29,7 +29,6 @@
 const fs = require('fs');
 const path = require('path');
 const Rules = require('../rules.js');
-const { execSync } = require('child_process');
 
 const CONFIG = {
   rpc: process.env.SEEKER_RPC || 'https://rpc.mainnet.chain.robinhood.com',
@@ -42,10 +41,8 @@ const CONFIG = {
   firstBlock: 83689515,                                 // the contract's first event: nothing to read before it
   rules: { start: 7, startMax: 100, perDay: 1, moveMax: 7 },   // start: per seeker held, capped at startMax credits per wallet
   lag: 30,            // stay this many blocks (a few seconds) behind the newest one
-  startBack: 600,     // the start is the block this many seconds before the starting round (OpenSea's history needs a moment)
   settle: 3600,       // OpenSea's history can take a while to fill in: verify only compares listings older than this,
   reread: 86400,      // and every round re-reads this much of OpenSea's listing history
-  budget: 20 * 60e3,  // a round stops reading OpenSea's full history after this long and the next one carries on
   opensea: 'https://api.opensea.io/api/v2',
 };
 const ROOT = path.join(__dirname, '..');
@@ -287,55 +284,6 @@ async function listingHistory(after, before) {
   throw new Error('OpenSea kept sending pages');
 }
 
-/** The whole listing history up to `before`, read one day at a time. Each
-    finished day is saved in data/history-cache.jsonl, so a round that runs out
-    of time leaves its progress behind and the next round carries on from there.
-    Returns null if the time budget ran out before the end. */
-async function fullHistory(before, budgetMs) {
-  const began = Date.now();
-  const cache = readLines('history-cache.jsonl');
-  const done = new Map(cache.map(c => [c.from, c]));
-  const first = (await blockAt(CONFIG.firstBlock)).time;
-  const day0 = Math.floor(first / 86400) * 86400;
-  const totalDays = Math.ceil((before - day0) / 86400);
-  let pushed = Date.now();
-  const progress = () => {
-    let found = 0;
-    for (const c of done.values()) found += c.listings.length;
-    writeJson('progress.json', { reading: 'OpenSea listing history', days: done.size, totalDays, listings: found,
-                                 from: day0, until: before, updated: now() });
-  };
-  for (let from = day0; from < before; from += 86400) {
-    if (done.has(from) && done.get(from).to === Math.min(from + 86400, before)) continue;
-    if (Date.now() - began > budgetMs) {
-      console.log(`  stopping for this round: ${done.size} of ${totalDays} days of OpenSea's history read; the next round carries on`);
-      checkpoint(`start: ${done.size} of ${totalDays} days of listing history read`);
-      return null;
-    }
-    const to = Math.min(from + 86400, before);
-    const day = await listingHistory(from, to);
-    const row = { from, to, listings: day.filter(l => l.t >= from && l.t < to) };
-    done.set(from, row);
-    appendLines('history-cache.jsonl', [row]);
-    progress();
-    console.log(`  ${new Date(from * 1000).toISOString().slice(0, 10)}: ${row.listings.length} listings of seekers (${done.size}/${totalDays} days)`);
-    if (Date.now() - pushed > 30e3) { checkpoint(`start: ${done.size} of ${totalDays} days of listing history read`); pushed = Date.now(); }
-  }
-  const all = new Map();
-  for (const c of done.values()) for (const l of c.listings) all.set(l.h, l);
-  return [...all.values()].sort((a, b) => a.t - b.t || (a.h < b.h ? -1 : 1));
-}
-
-/** On GitHub (CREDITS_PUSH=1): save data/ to the repository right away, so
-    progress is visible and kept even if the round is cut off later. */
-function checkpoint(message) {
-  if (!process.env.CREDITS_PUSH) return;
-  try {
-    execSync(`git add data && (git diff --cached --quiet || git commit -q -m ${JSON.stringify(message)}) && git pull -q --rebase && git push -q`,
-             { cwd: ROOT, stdio: 'inherit' });
-  } catch (e) { console.log(`  (could not save progress to the repository just now: ${e.message.split('\n')[0]})`); }
-}
-
 /** The signed orders behind the collection's current listings (for the archive). */
 async function currentOrders() {
   const out = [];
@@ -345,6 +293,7 @@ async function currentOrders() {
     if (!Array.isArray(r.listings)) throw new Error('OpenSea sent no list of listings');
     for (const l of r.listings) {
       if (l.order_hash && l.protocol_data) out.push({ h: l.order_hash.toLowerCase(), protocol: String(l.protocol_address || '').toLowerCase(),
+                                                      created: seconds(l.order_created_at), status: String(l.status || 'ACTIVE').toUpperCase(),
                                                       parameters: l.protocol_data.parameters, signature: l.protocol_data.signature });
     }
     next = r.next;
@@ -355,21 +304,23 @@ async function currentOrders() {
 
 // ---------------------------------------------------------------- the start
 
-/** The listings live at the start (time T, block `block`), as rules.js has it:
-    live before T, end date after T, by the seeker's holder at T who has held it
-    since before it went live, and not cancelled on-chain before T. */
-async function liveAtStart(history, owners, block, T) {
-  const lastMoveTime = await blockTimes(owners.lastMove);
-  const candidates = history.filter(l => Rules.liveFrom(l) < T && l.e > T &&
-    owners[l.id - 1] === l.maker && lastMoveTime.get(owners.lastMove[l.id - 1]) <= Rules.liveFrom(l));
-  const makers = new Set(candidates.map(l => l.maker));
-  const cancels = makers.size ? await seaportLogs(CONFIG.firstBlock, block, makers) : [];
-  const times = await blockTimes(cancels.filter(l => l.topics[0] === TOPIC.counter).map(l => l.blockNumber));
-  const cancelled = new Set(cancels.filter(l => l.topics[0] === TOPIC.cancel).map(l => l.data.slice(0, 66).toLowerCase()));
-  const lastCounter = new Map();
-  for (const l of cancels) if (l.topics[0] === TOPIC.counter) lastCounter.set(addr(l.topics[1]), times.get(Number(l.blockNumber)));
-  return candidates.filter(l => !cancelled.has(l.h) && !(l.t < (lastCounter.get(l.maker) ?? -Infinity)))
-    .map(({ h, id, maker, t, s, e, p }) => ({ h, id, maker, t, s, e, ...(p ? { p } : {}) }));
+/** The listings live at the start: OpenSea's active listings of seekers read at
+    the start, kept if live at time T (signed start at or before T, end date
+    after T, posted at or before T) and made by the seeker's holder at T. They
+    are published in genesis.json with their signed orders (orders.jsonl). */
+function snapshotListings(orders, owners, T) {
+  const out = new Map();
+  for (const o of orders) {
+    const p = o.parameters;
+    if (!p || !Array.isArray(p.offer) || (o.status && o.status !== 'ACTIVE')) continue;
+    const item = p.offer.find(x => String(x.token).toLowerCase() === CONFIG.nft);
+    if (!item) continue;
+    const id = Number(item.identifierOrCriteria), maker = String(p.offerer).toLowerCase();
+    const s = Number(p.startTime), e = Number(p.endTime), t = o.created || s;
+    if (!(id >= 1 && id <= CONFIG.supply) || owners[id - 1] !== maker || t > T || s > T || e <= T) continue;
+    out.set(o.h, { h: o.h, id, maker, t, s, e });
+  }
+  return [...out.values()].sort((a, b) => a.id - b.id || (a.h < b.h ? -1 : 1));
 }
 
 // ---------------------------------------------------------------- files
@@ -397,48 +348,39 @@ function estimateBlock(genesis, head, time) {
 
 // ---------------------------------------------------------------- commands
 
-/** The start. Its block is fixed first (data/start.json), by the round run with
-    START=true; the rest (who held what, the listings live at that block) follows
-    from public records, so it can be worked out then or later with the same result. */
+/** The start (the round run with START=true): the block, who holds every
+    seeker at it (from the chain), and the OpenSea listings live at it (read from
+    OpenSea at that moment and published with their signed orders). */
 async function start() {
-  fs.mkdirSync(DATA, { recursive: true });
-  let at = fs.existsSync(file('start.json')) ? readJson('start.json') : null;
-  if (!at) {
-    if (!/^(true|1)$/.test(process.env.START || '')) return console.log('the count has not started');
-    const block = await blockBefore(now() - CONFIG.startBack);
-    at = { block: block.number, time: block.time };
-    writeJson('start.json', at);
-    console.log(`staking starts at block ${at.block} (${new Date(at.time * 1000).toISOString()})`);
-  }
-  let history;
-  const readUntil = at.readUntil || now();                       // the moment the history is read up to, fixed on the first try
-  if (!at.readUntil) { at.readUntil = readUntil; writeJson('start.json', at); }
-  try {
-    history = await fullHistory(readUntil, CONFIG.budget);
-  } catch (e) {
-    return console.log(`the start is fixed at block ${at.block}; the rest waits for OpenSea's listing history (${e.message})`);
-  }
-  if (!history) return;
-  const owners = await ownersAt(at.block);
+  if (!/^(true|1)$/.test(process.env.START || '')) return console.log('the count has not started');
+  const latest = await blockAt('latest');
+  const block = await blockAt(latest.number - CONFIG.lag);
+  const T = block.time;
+  const orders = await currentOrders();                          // OpenSea's live listings, right now
+  console.log(`start: block ${block.number} (${new Date(T * 1000).toISOString()}); OpenSea shows ${orders.length} active listings`);
+  const owners = await ownersAt(block.number);
   const holders = [...new Set(owners)].sort();
   const index = new Map(holders.map((a, i) => [a, i]));
+  const live = snapshotListings(orders, owners, T);
   const genesis = {
-    version: 2, chainId: CONFIG.chainId, nft: CONFIG.nft, slug: CONFIG.slug, supply: CONFIG.supply,
-    block: at.block, time: at.time, rules: CONFIG.rules,
+    version: 3, chainId: CONFIG.chainId, nft: CONFIG.nft, slug: CONFIG.slug, supply: CONFIG.supply,
+    block: block.number, time: T, rules: CONFIG.rules,
     holders, owner: owners.map(a => index.get(a)),
-    listings: await liveAtStart(history, owners, at.block, at.time),
+    listings: live,
   };
-  const later = history.filter(l => Rules.liveFrom(l) >= at.time);
-  Rules.replay(genesis, [], later, at.time);                    // throws if anything is inconsistent
+  const atStart = new Set(live.map(l => l.h));
+  const later = (await listingHistory(T, now())).filter(l => Rules.liveFrom(l) >= T && !atStart.has(l.h));
+  Rules.replay(genesis, [], later, T);                           // throws if anything is inconsistent
+  fs.mkdirSync(DATA, { recursive: true });
   writeJson('genesis.json', genesis);
   writeLines('events.jsonl', []);
   writeLines('cancels.jsonl', []);
   writeLines('listings.jsonl', later);
-  writeJson('head.json', { block: at.block, time: at.time, listingsTime: readUntil, events: 0, cancels: 0, listings: later.length });
-  fs.rmSync(file('history-cache.jsonl'), { force: true });
-  fs.rmSync(file('progress.json'), { force: true });
-  console.log(`start (block ${at.block}): ${holders.length} addresses get ${CONFIG.rules.start} credits per seeker, capped at ${CONFIG.rules.startMax} per wallet; ` +
-              `${new Set(genesis.listings.map(l => l.id)).size} seekers listed at the start; ${later.length} listings since. The next round catches up to now.`);
+  const keep = new Set([...atStart, ...later.map(l => l.h)]);
+  writeLines('orders.jsonl', orders.filter(o => keep.has(o.h)).map(({ h, protocol, parameters, signature }) => ({ h, protocol, parameters, signature })));
+  writeJson('head.json', { block: block.number, time: T, listingsTime: now(), events: 0, cancels: 0, listings: later.length });
+  console.log(`start: ${holders.length} addresses get ${CONFIG.rules.start} credits per seeker, capped at ${CONFIG.rules.startMax} per wallet; ` +
+              `${new Set(live.map(l => l.id)).size} seekers start as listed (${live.length} live listings by their holders)`);
 }
 
 async function run() {
@@ -529,22 +471,25 @@ async function verify() {
   const fixes = events.filter(e => e.k === 'adjust');
   if (fixes.length) console.log(`note  ${fixes.length} corrections made by hand, each with its reason`);
 
-  let all = (genesis.listings || []).concat(listings), history = null;
-  try { history = await listingHistory(0, now()); } catch (e) { console.log(`skip  OpenSea's listing history could not be read (${e.message}): checking the listings on record only`); }
+  const start = genesis.listings || [];
+  const archived = new Map(readLines('orders.jsonl').map(o => [o.h, o]));
+  say(start.every(l => owners[l.id - 1] === l.maker && Rules.liveFrom(l) <= genesis.time && l.e > genesis.time),
+      `the ${start.length} listings live at the start were each made by the seeker's holder at the start, posted before it and ending after it`);
+  say(start.every(l => { const o = archived.get(l.h); return o && String(o.parameters.offerer).toLowerCase() === l.maker && Number(o.parameters.endTime) === l.e; }),
+      `each of them is published with its signed order (data/orders.jsonl)`);
+  let all = start.concat(listings), history = null;
+  try { history = await listingHistory(genesis.time, now()); } catch (e) { console.log(`skip  OpenSea's listing history could not be read (${e.message}): checking the listings on record only`); }
   if (history) {
-    const start = await liveAtStart(history, owners, genesis.block, genesis.time);
     const k = l => JSON.stringify([l.h, l.id, l.maker, l.t, l.s, l.e]);
-    const a = new Set(start.map(k)), b = new Set((genesis.listings || []).map(k));
-    say(a.size === b.size && [...a].every(x => b.has(x)), `the ${b.size} listings live at the start are what OpenSea's history and the chain give (${a.size})`);
-    const settled = head.listingsTime - CONFIG.settle;
-    const want = new Map(history.filter(l => Rules.liveFrom(l) >= genesis.time && l.t <= settled).map(l => [l.h, k(l)]));
+    const settled = head.listingsTime - CONFIG.settle, atStart = new Set(start.map(l => l.h));
+    const want = new Map(history.filter(l => Rules.liveFrom(l) >= genesis.time && l.t <= settled && !atStart.has(l.h)).map(l => [l.h, k(l)]));
     const have = new Map(listings.filter(l => l.t <= settled).map(l => [l.h, k(l)]));
     const missing = [...want.keys()].filter(h => !have.has(h)), extra = [...have.keys()].filter(h => !want.has(h));
     const changed = [...want.keys()].filter(h => have.has(h) && have.get(h) !== want.get(h));
     say(!missing.length && !extra.length && !changed.length,
-        `the ${have.size} listings on record (posted until an hour before the last read) are OpenSea's history` +
+        `the ${have.size} listings since the start on record (posted until an hour before the last read) are OpenSea's history` +
         (missing.length + extra.length + changed.length ? `: ${missing.length} missing, ${extra.length} extra, ${changed.length} different` : ''));
-    all = start.concat(history.filter(l => Rules.liveFrom(l) >= genesis.time && l.t <= head.listingsTime));
+    all = start.concat(history.filter(l => Rules.liveFrom(l) >= genesis.time && l.t <= head.listingsTime && !atStart.has(l.h)));
   }
   const makers = new Set(all.map(l => l.maker));
   const chainCancels = makers.size ? await cancelEvents(await seaportLogs(genesis.block + 1, head.block, makers), all) : [];
@@ -620,13 +565,13 @@ function publish(dir) {
   }
   fs.writeFileSync(path.join(dir, 'data', 'summary.json'), JSON.stringify({
     time: s.time, block: head.block, listingsTime: head.listingsTime, nft: genesis.nft, rules: genesis.rules,
-    start: { block: genesis.block, time: genesis.time, wallets: genesis.holders.length, units: startTotal },
+    start: { block: genesis.block, time: genesis.time, wallets: genesis.holders.length, units: startTotal, listed: new Set((genesis.listings || []).map(l => l.id)).size },
     totals: { units: s.total, holders, earning: s.supply - s.listedCount, listed: s.listedCount, supply: s.supply },
   }));
   console.log(`published ${n} wallets and the summary at block ${head.block}`);
 }
 
-module.exports = { CONFIG, TOPIC, blockAt, blockBefore, ownersAt, moveEvents, cancelEvents, listingFromEvent, seconds, liveAtStart };
+module.exports = { CONFIG, TOPIC, blockAt, blockBefore, ownersAt, moveEvents, cancelEvents, listingFromEvent, seconds, snapshotListings };
 
 if (require.main === module) {
   const [command, argument] = process.argv.slice(2);

@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Rules = require('../rules.js');
-const { CONFIG, listingFromEvent, seconds } = require('./bot.js');
+const { CONFIG, listingFromEvent, seconds, snapshotListings } = require('./bot.js');
 
 const A = '0x' + 'a'.repeat(40), B = '0x' + 'b'.repeat(40), C = '0x' + 'c'.repeat(40), D = '0x' + 'd'.repeat(40);
 const DAY = 86400, T0 = 1_800_000_000;
@@ -192,6 +192,23 @@ test('a record that does not fit the rules is refused', () => {
   assert.throws(() => play(g, [], [listing('0xh', 1, A, 1, 2), listing('0xh', 1, A, 1, 2)], 5), /twice/);
   assert.throws(() => play(g, [adjust(1, A, 0.5)], [], 5), /whole credits/);
   assert.throws(() => play(genesis([A], RULES, [listing('0xh', 1, B, -1, 2)]), [], [], 5), /not by the holder/);
+});
+
+test('the start: OpenSea listings live at that moment, by the holder, are kept; the rest are not', () => {
+  const T = 1_800_000_000, nft = CONFIG.nft;
+  const owners = Array(2222).fill(B); owners[0] = A; owners[1] = A;
+  const order = (h, id, maker, s, e, extra = {}) => ({ h, created: s, status: 'ACTIVE',
+    parameters: { offerer: maker, startTime: String(s), endTime: String(e), offer: [{ token: nft, identifierOrCriteria: String(id) }] }, ...extra });
+  const got = snapshotListings([
+    order('0x1', 1, A, T - 100, T + 100),                                  // kept
+    order('0x2', 2, A, T - 100, T - 1),                                    // ended before the start
+    order('0x3', 1, B, T - 100, T + 100),                                  // not by the holder
+    order('0x4', 2, A, T + 10, T + 100),                                   // starts after the start
+    order('0x5', 2, A, T - 100, T + 100, { status: 'CANCELLED' }),         // not active
+    order('0x6', 3, B, T - 100, T + 100, { parameters: { offerer: B, startTime: String(T - 100), endTime: String(T + 100), offer: [{ token: '0x' + '9'.repeat(40), identifierOrCriteria: '3' }] } }),
+    order('0x1', 1, A, T - 100, T + 100),                                  // the same order twice
+  ], owners, T);
+  assert.deepEqual(got, [{ h: '0x1', id: 1, maker: A, t: T - 100, s: T - 100, e: T + 100 }]);
 });
 
 // ---- reading OpenSea's history

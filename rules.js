@@ -5,8 +5,10 @@
 
    Everything it reads is a permanent public record, so anyone who reads the
    same records gets exactly the same balance for every wallet, to the unit:
-     data/genesis.json   the start: its block and time, who held every seeker,
-                         and the OpenSea listings that were live at that moment
+     data/genesis.json   the start: its block and time, who held every seeker
+                         (from the chain), and the OpenSea listings live at that
+                         moment, read from OpenSea then and published with
+                         their signed orders (data/orders.jsonl)
      data/events.jsonl   every move of a seeker since the start (its Transfer
                          events, in chain order), plus corrections made by hand
      data/cancels.jsonl  the on-chain cancellations that can end a seeker
