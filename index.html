@@ -131,7 +131,7 @@
       <div class="muted address" id="who"></div>
       <div class="tiles">
         <div class="tile"><span class="cap">seekers held</span><b id="held"></b></div>
-        <div class="tile"><span class="cap">earning</span><b id="earning" class="ok"></b></div>
+        <div class="tile"><span class="cap">staked</span><b id="earning" class="ok"></b></div>
         <div class="tile"><span class="cap">listed</span><b id="listedCount"></b></div>
       </div>
     </div>
@@ -154,12 +154,12 @@
   </div>
 
   <div class="panel">
-    <h2>Right now</h2>
+    <h2>Full collection data</h2>
     <div id="status" class="muted">Loading…</div>
     <div class="tiles" id="network" hidden>
       <div class="tile"><span class="cap">all credits</span><b id="nTotal"></b></div>
       <div class="tile"><span class="cap">holders</span><b id="nHolders"></b></div>
-      <div class="tile"><span class="cap">earning</span><b id="nEarning" class="ok"></b></div>
+      <div class="tile"><span class="cap">staked</span><b id="nEarning" class="ok"></b></div>
       <div class="tile"><span class="cap">listed</span><b id="nListed"></b></div>
     </div>
   </div>
@@ -310,9 +310,9 @@ async function show(input) {
   $('seekersPanel').hidden = !mine.length;
   $('seekers').replaceChildren(...mine.map(m => el('a', {
     className: 'chip' + (m.listed ? ' listed' : ''), href: seekerLink(m.id), target: '_blank', rel: 'noopener',
-    textContent: '#' + m.id + (m.listed ? ' listed' : ''), title: m.listed ? 'Listed: earning nothing' : 'Earning 1 a day',
+    textContent: '#' + m.id + (m.listed ? ' listed' : ''), title: m.listed ? 'Listed: earning nothing' : 'Staked: earning 1 a day',
   })));
-  $('seekersNote').textContent = 'white: earning. gold: listed, earning nothing until the listing ends or is delisted on-chain (see "how to delist" below).';
+  $('seekersNote').textContent = 'white: staked, earning 1 a day. gold: listed, earning nothing until the listing ends or is delisted on-chain (see "how to delist" below).';
   $('seekersNote').hidden = !listed;
 
   const row = (label, units, cls) => el('tr', { className: cls || '' }, el('td', { textContent: label }), el('td', { className: 'n', textContent: units }));
