@@ -1,4 +1,4 @@
-# One round of the credits bot a few times an hour: read the chain and OpenSea,
+# One round of the credits bot every 5 minutes: read the chain and OpenSea,
 # add the new events to data/, save them in the repository and publish the site.
 #
 # Nothing counts until the start: until then every round only checks that the
