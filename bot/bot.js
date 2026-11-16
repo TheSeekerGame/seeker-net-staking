@@ -42,7 +42,7 @@ const CONFIG = {
   rules: { start: 7, startMax: 100, perDay: 1, moveMax: 7 },   // start: per seeker held, capped at startMax credits per wallet
   lag: 30,            // stay this many blocks (a few seconds) behind the newest one
   settle: 3600,       // OpenSea's history can take a while to fill in: verify only compares listings older than this,
-  reread: 86400,      // and every round re-reads this much of OpenSea's listing history
+  reread: 3 * 3600,   // and every round re-reads this much of OpenSea's listing history (trading bots post thousands a day)
   opensea: 'https://api.opensea.io/api/v2',
 };
 const ROOT = path.join(__dirname, '..');
