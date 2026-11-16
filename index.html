@@ -89,10 +89,7 @@
   .sum tr:last-child td, #activity tr:last-child td { padding-bottom: 0; text-box-trim: trim-end; text-box-edge: cap alphabetic; }
   .sum tr.total td { border-top: 1px solid var(--line); font-weight: 700; padding-top: 9px; color: var(--text); }
   /* room below the last row for letters that hang under the line (g, y), given back underneath */
-  .steps { margin: 0; padding-left: 22px; }
-  .steps li { margin: 0 0 8px; }
-  .steps li:last-child { margin-bottom: 0; }
-  .steps b { font-weight: 700; color: var(--text); }
+  #endPanel b { font-weight: 700; color: var(--text); }
   .scroll { max-height: 420px; overflow: auto; scrollbar-color: var(--line) transparent; padding-bottom: 5px; margin-bottom: -5px; }
   dl { margin: 0; }
   dt { color: var(--text); margin: 16px 0 4px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
@@ -168,13 +165,10 @@
   </div>
 
   <div class="panel" id="endPanel">
-    <h2>Force-cancel all listings</h2>
-    <p class="muted" style="margin:0 0 12px">Delisting on OpenSea is not enough: its quick cancel happens off-chain and leaves no public record, so your listing keeps counting until its end date. Cancel on-chain instead, in either of two ways:</p>
-    <ol class="steps">
-      <li><b>On OpenSea:</b> Profile → Listings → filter Robinhood Chain → Cancel all listings and offers → confirm in your wallet.</li>
-      <li><b>On the Robinhood Chain explorer:</b> open <a href="https://robinhoodchain.blockscout.com/address/0x0000000000000068F116a894984e2DB1123eB395?tab=write_contract" target="_blank" rel="noopener">Seaport</a> (the contract OpenSea uses), click <b>Connect your wallet</b> at the top, click <b>13. incrementCounter</b> in the list, then <b>Write</b>, and approve in your wallet.</li>
-    </ol>
-    <p class="muted" style="margin:12px 0 0">Either is one small on-chain transaction, and your seekers earn again from that block. Both cancel all your OpenSea listings and offers on Robinhood Chain, in every collection.</p>
+    <h2>How to delist</h2>
+    <p class="muted" style="margin:0 0 12px">Delisting on OpenSea is not enough: its quick cancel happens off-chain and leaves no public record, so your listing keeps counting until its end date.</p>
+    <p style="margin:0 0 12px">To delist your seekers on-chain, open <a href="https://robinhoodchain.blockscout.com/address/0x0000000000000068F116a894984e2DB1123eB395?tab=write_contract" target="_blank" rel="noopener">Seaport</a> (the official contract OpenSea uses), click <b>Connect your wallet</b> at the top, click <b>13. incrementCounter</b> in the list, then <b>Write</b>, and approve in your wallet. It costs a fraction of a cent, and your seekers earn again right away.</p>
+    <p class="muted" style="margin:0">Note: this cancels all your OpenSea listings and offers on Robinhood Chain, in every collection.</p>
   </div>
 
   <div class="panel">
@@ -187,7 +181,7 @@
       <dt>What "listed" means</dt>
       <dd>A seeker is listed from the moment its holder lists it on OpenSea (any price, private listings too) until that listing's end date, unless the seeker is sold or moved first, or the listing is cancelled on-chain. Listed seekers earn nothing.</dd>
       <dt>Ending a listing early</dt>
-      <dd>Delisting on OpenSea is not enough. OpenSea's quick cancel happens off-chain and leaves no public record, so the listing keeps counting until its end date. To stop it sooner, cancel on-chain (see "Force-cancel all listings" above), or pick a short duration when you list.</dd>
+      <dd>Delisting on OpenSea is not enough. OpenSea's quick cancel happens off-chain and leaves no public record, so the listing keeps counting until its end date. To stop it sooner, delist on-chain (see "How to delist" above), or pick a short duration when you list.</dd>
       <dt>Selling and moving</dt>
       <dd>When a seeker changes wallet (a sale, a gift, or a move between your own wallets), 7 credits go from the sender to the new owner, or all the sender has if fewer. Moves count in chain order: a wallet with 10 credits that sells two seekers gives 7, then 3. Flipping costs nothing: you get 7 when you buy and pass 7 on when you sell.</dd>
       <dt>Where credits come from</dt>
@@ -345,7 +339,7 @@ async function show(input) {
     className: 'chip' + (m.listed ? ' listed' : ''), href: seekerLink(m.id), target: '_blank', rel: 'noopener',
     textContent: '#' + m.id + (m.listed ? ' listed' : ''), title: m.listed ? 'Listed: earning nothing' : 'Earning 1 a day',
   })));
-  $('seekersNote').textContent = 'white: earning. gold: listed, earning nothing until the listing ends or is force-cancelled (see below).';
+  $('seekersNote').textContent = 'white: earning. gold: listed, earning nothing until the listing ends or is delisted on-chain (see "how to delist" below).';
   $('seekersNote').hidden = !listed;
 
   const row = (label, units, cls) => el('tr', { className: cls || '' }, el('td', { textContent: label }), el('td', { className: 'n', textContent: units }));
