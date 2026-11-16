@@ -44,6 +44,7 @@ const CONFIG = {
   startBack: 600,     // the start is the block this many seconds before the starting round (OpenSea's history needs a moment)
   settle: 3600,       // OpenSea's history can take a while to fill in: verify only compares listings older than this,
   reread: 86400,      // and every round re-reads this much of OpenSea's listing history
+  budget: 20 * 60e3,  // a round stops reading OpenSea's full history after this long and the next one carries on
   opensea: 'https://api.opensea.io/api/v2',
 };
 const ROOT = path.join(__dirname, '..');
@@ -286,6 +287,34 @@ async function listingHistory(after, before) {
   throw new Error('OpenSea kept sending pages');
 }
 
+/** The whole listing history up to `before`, read one day at a time. Each
+    finished day is saved in data/history-cache.jsonl, so a round that runs out
+    of time leaves its progress behind and the next round carries on from there.
+    Returns null if the time budget ran out before the end. */
+async function fullHistory(before, budgetMs) {
+  const began = Date.now();
+  const cache = readLines('history-cache.jsonl');
+  const done = new Map(cache.map(c => [c.from, c]));
+  const first = (await blockAt(CONFIG.firstBlock)).time;
+  const day0 = Math.floor(first / 86400) * 86400;
+  for (let from = day0; from < before; from += 86400) {
+    if (done.has(from) && done.get(from).to === Math.min(from + 86400, before)) continue;
+    if (Date.now() - began > budgetMs) {
+      console.log(`  stopping for this round: ${done.size} days of OpenSea's history read so far; the next round carries on`);
+      return null;
+    }
+    const to = Math.min(from + 86400, before);
+    const day = await listingHistory(from, to);
+    const row = { from, to, listings: day.filter(l => l.t >= from && l.t < to) };
+    done.set(from, row);
+    appendLines('history-cache.jsonl', [row]);
+    console.log(`  ${new Date(from * 1000).toISOString().slice(0, 10)}: ${row.listings.length} listings of seekers`);
+  }
+  const all = new Map();
+  for (const c of done.values()) for (const l of c.listings) all.set(l.h, l);
+  return [...all.values()].sort((a, b) => a.t - b.t || (a.h < b.h ? -1 : 1));
+}
+
 /** The signed orders behind the collection's current listings (for the archive). */
 async function currentOrders() {
   const out = [];
@@ -361,11 +390,14 @@ async function start() {
     console.log(`staking starts at block ${at.block} (${new Date(at.time * 1000).toISOString()})`);
   }
   let history;
+  const readUntil = at.readUntil || now();                       // the moment the history is read up to, fixed on the first try
+  if (!at.readUntil) { at.readUntil = readUntil; writeJson('start.json', at); }
   try {
-    history = await listingHistory(0, now());
+    history = await fullHistory(readUntil, CONFIG.budget);
   } catch (e) {
     return console.log(`the start is fixed at block ${at.block}; the rest waits for OpenSea's listing history (${e.message})`);
   }
+  if (!history) return;
   const owners = await ownersAt(at.block);
   const holders = [...new Set(owners)].sort();
   const index = new Map(holders.map((a, i) => [a, i]));
@@ -381,7 +413,8 @@ async function start() {
   writeLines('events.jsonl', []);
   writeLines('cancels.jsonl', []);
   writeLines('listings.jsonl', later);
-  writeJson('head.json', { block: at.block, time: at.time, listingsTime: now(), events: 0, cancels: 0, listings: later.length });
+  writeJson('head.json', { block: at.block, time: at.time, listingsTime: readUntil, events: 0, cancels: 0, listings: later.length });
+  fs.rmSync(file('history-cache.jsonl'), { force: true });
   console.log(`start (block ${at.block}): ${holders.length} addresses get ${CONFIG.rules.start} credits per seeker, capped at ${CONFIG.rules.startMax} per wallet; ` +
               `${new Set(genesis.listings.map(l => l.id)).size} seekers listed at the start; ${later.length} listings since. The next round catches up to now.`);
 }
