@@ -21,6 +21,7 @@ the same balance for every wallet, to the unit.
 | `data/listings.jsonl` | every OpenSea listing of a seeker since the start, from OpenSea's listing history |
 | `data/orders.jsonl` | the signed orders behind those listings, where OpenSea still served them (an archive; the rules never read it) |
 | `data/head.json` | how far the copy goes |
+| `data/summary.json`, `data/wallets/` | ready-made results for the page, one small file per wallet: worked out from the records above when the site is published (not kept in the repository) |
 | `rules.js` | the rules: turns the files above into every balance. Used by the bot and by the page |
 | `og.png`, `icon.png` | the picture shown when the link is shared, and the tab icon (seeker #1302, from the collection's layers) |
 | `index.html` | the page: type an address, see its balance, what it earns and its history; end your listings on-chain |

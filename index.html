@@ -200,7 +200,8 @@
 const R = SeekerCredits;
 const EXPLORER = 'https://robinhoodchain.blockscout.com';
 const $ = id => document.getElementById(id);
-let data = null;          // { genesis, state, head }
+let data = null;          // { sum }: the bot's ready-made summary
+let asked = 0;            // the latest address asked for (answers to older ones are dropped)
 let ticker = 0;
 
 const short = a => a.slice(0, 6) + '…' + a.slice(-4);
@@ -216,21 +217,21 @@ function el(tag, props, ...children) {
   for (const c of children) e.append(c);
   return e;
 }
-const seekerLink = id => `https://opensea.io/item/robinhood/${data.genesis.nft}/${id}`;
+const seekerLink = id => `https://opensea.io/item/robinhood/${data.sum.nft}/${id}`;
+async function get(name, kind) {
+  const r = await fetch('data/' + name, { cache: 'no-cache' });
+  if (!r.ok) throw Object.assign(new Error(name), { status: r.status });
+  return r[kind]();
+}
+const wallet = address => get('wallets/' + address + '.json', 'json');
 const addressLink = a => el('a', { href: '#' + a, textContent: short(a), title: a });
 
 async function load() {
   const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = location.pathname.split('/')[1];
   if (m && repo) $('repo').append(' (', el('a', { href: `https://github.com/${m[1]}/${repo}`, textContent: 'the code and how' }), ')');
-  const get = async (name, kind) => {
-    const r = await fetch('data/' + name, { cache: 'no-cache' });
-    if (!r.ok) throw Object.assign(new Error(name), { status: r.status });
-    return r[kind]();
-  };
-  const lines = name => get(name, 'text').catch(e => { if (e.status === 404) return ''; throw e; });
-  let genesis, events, cancels, listings, head, orders = [];
+  let sum;
   try {
-    genesis = await get('genesis.json', 'json');
+    sum = await get('summary.json', 'json');
   } catch (e) {
     const at = e.status === 404 ? await get('start.json', 'json').catch(() => null) : null;
     if (at) {
@@ -243,35 +244,21 @@ async function load() {
     $('status').textContent = e.status === 404 ? 'Credits have not started yet. Come back soon.' : 'The data could not be loaded. Try again in a minute.';
     return;
   }
-  try {
-    [events, cancels, listings, head] = await Promise.all([get('events.jsonl', 'text'), lines('cancels.jsonl'), lines('listings.jsonl'), get('head.json', 'json')]);
-    orders = R.parseLines(await lines('orders.jsonl'));
-  } catch (e) {
-    $('status').textContent = 'The data could not be loaded. Try again in a minute.';
-    return;
-  }
-  // the record may be a moment ahead of the notes: only use what the notes cover
-  const chain = R.parseLines(events).concat(R.parseLines(cancels)).filter(e => e.t <= head.time);
-  listings = R.parseLines(listings);
-  const state = R.replay(genesis, chain, listings, head.time);
-  data = { genesis, state, head, listings: (genesis.listings || []).concat(listings), orders };
-
-  let holders = 0, startTotal = 0;
-  for (const x of state.accounts.values()) { if (x.held) holders++; startTotal += x.start; }
-  $('nTotal').textContent = Math.round(state.total / R.UNIT).toLocaleString('en');
-  $('nHolders').textContent = holders.toLocaleString('en');
-  $('nEarning').textContent = (state.supply - state.listedCount).toLocaleString('en');
-  $('nListed').textContent = state.listedCount.toLocaleString('en');
+  data = { sum };
+  $('nTotal').textContent = Math.round(sum.totals.units / R.UNIT).toLocaleString('en');
+  $('nHolders').textContent = sum.totals.holders.toLocaleString('en');
+  $('nEarning').textContent = sum.totals.earning.toLocaleString('en');
+  $('nListed').textContent = sum.totals.listed.toLocaleString('en');
   $('network').hidden = false;
-  const age = Date.now() / 1000 - head.time;
-  const listingAge = Date.now() / 1000 - head.listingsTime;
-  $('status').textContent = `Updated ${ago(age)} (block ${head.block.toLocaleString('en')}). Started ${when(genesis.time)}.`;
+  const age = Date.now() / 1000 - sum.time;
+  const listingAge = Date.now() / 1000 - sum.listingsTime;
+  $('status').textContent = `Updated ${ago(age)} (block ${sum.block.toLocaleString('en')}). Started ${when(sum.start.time)}.`;
   if (age > 7200) $('status').append(el('div', { className: 'warn', textContent: 'The bot hasn\'t updated for a while. The numbers will catch up when it\'s back.' }));
   else if (listingAge > 7200) $('status').append(el('div', { className: 'warn', textContent: `Listings were last read from OpenSea ${ago(listingAge)}; sales and moves are up to date.` }));
-  const utc = new Date(genesis.time * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-  $('aboutStart').textContent = `Staking started at Robinhood Chain block ${genesis.block} (${utc}; ${when(genesis.time)} your time). ` +
-    `Every wallet holding seekers then got ${genesis.rules.start} credits per seeker, capped at ${genesis.rules.startMax} per wallet, so every seeker has credits behind it from the very first sale ` +
-    `(${genesis.holders.length} wallets, ${Math.round(startTotal / R.UNIT).toLocaleString('en')} credits). Nothing before the start counts.`;
+  const utc = new Date(sum.start.time * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  $('aboutStart').textContent = `Staking started at Robinhood Chain block ${sum.start.block} (${utc}; ${when(sum.start.time)} your time). ` +
+    `Every wallet holding seekers then got ${sum.rules.start} credits per seeker, capped at ${sum.rules.startMax} per wallet, so every seeker has credits behind it from the very first sale ` +
+    `(${sum.start.wallets} wallets, ${Math.round(sum.start.units / R.UNIT).toLocaleString('en')} credits). Nothing before the start counts.`;
   route();
 }
 
@@ -286,25 +273,33 @@ function say(text, cls) {
   $('message').className = cls || 'muted';
 }
 
-function show(input) {
+async function show(input) {
   $('result').hidden = true;
   clearInterval(ticker);
+  const me = ++asked;
   if (!/^0x[0-9a-fA-F]{40}$/.test(input)) return say('That is not a wallet address (it starts with 0x and has 42 characters).', 'bad');
   if (!data) return say('Still loading…');
   const address = input.toLowerCase();
-  const x = data.state.accounts.get(address);
-  if (!x) return say('No seekers here since the start, so no credits. A seeker bought now earns from day one and brings 7 credits from its seller.');
+  let x;
+  try {
+    x = await wallet(address);
+  } catch (e) {
+    if (me !== asked) return;
+    return e.status === 404 ? say('No seekers here since the start, so no credits. A seeker bought now earns from day one and brings 7 credits from its seller.')
+      : say('This wallet could not be loaded. Try again in a minute.', 'bad');
+  }
+  if (me !== asked) return;
   say('');
 
-  const mine = R.seekersOf(data.state, address);
+  const mine = x.seekers.map(([id, l]) => ({ id, listed: !!l }));
   const listed = mine.filter(m => m.listed).length, earning = mine.length - listed;
-  const perDay = earning * data.genesis.rules.perDay;
+  const perDay = earning * data.sum.rules.perDay;
 
   // the balance keeps growing between the bot's reports: show it live, to 2 decimals
   // (rounded down, so it never shows a credit before it is earned)
-  const live = Date.now() / 1000 - data.head.time < 7200;
+  const live = Date.now() / 1000 - x.time < 7200;
   const tick = () => {
-    const since = live ? Math.max(0, Date.now() / 1000 - data.state.time) : 0;
+    const since = live ? Math.max(0, Date.now() / 1000 - x.time) : 0;
     const hundredths = Math.floor((x.units + since * perDay) * 100 / R.UNIT);
     $('balance').textContent = Math.floor(hundredths / 100).toLocaleString('en');
     $('fraction').textContent = '.' + String(hundredths % 100).padStart(2, '0');
@@ -393,18 +388,16 @@ async function endAll() {
     const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' });
     const from = account.toLowerCase();
     // this wallet's SEEKER NET listings that can still count: before their end date, on seekers it holds
-    const held = new Set(R.seekersOf(data.state, from).map(m => m.id));
+    const w = await wallet(from).catch(e => { if (e.status === 404) return { listings: [] }; throw e; });
     const nowS = Date.now() / 1000;
-    const mine = data.listings.filter(l => l.maker === from && l.e > nowS && held.has(l.id));
+    const mine = w.listings.filter(l => l.e > nowS);
     if (!mine.length) return tell('This wallet has no SEEKER NET listings counting right now. Listed in the last 15 minutes? Try again after the next update.');
     const ethers = await loadEthers();
     const seaport = new ethers.Interface([`function cancel(${ORDER}[] orders) returns (bool)`, `function getOrderHash(${ORDER} order) view returns (bytes32)`]);
-    const byHash = new Map(data.orders.map(o => [o.h, o]));
     const ready = [], missing = [];
     for (const l of mine) {
-      const o = byHash.get(l.h);
-      if (!o || !o.parameters) { missing.push(l); continue; }
-      const c = components(o.parameters);
+      if (!l.order) { missing.push(l); continue; }
+      const c = components(l.order);
       const h = seaport.decodeFunctionResult('getOrderHash', await chainCall(SEAPORT, seaport.encodeFunctionData('getOrderHash', [c])))[0];
       if (h.toLowerCase() === l.h) ready.push([l, c]); else missing.push(l);    // only orders that are exactly the listing on record
     }

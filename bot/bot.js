@@ -6,6 +6,8 @@
    node bot/bot.js verify              rebuild data/ from the chain and OpenSea's history and compare
    node bot/bot.js balance 0xADDRESS   an address's balance and history
    node bot/bot.js totals              the whole picture in a few numbers
+   node bot/bot.js publish DIR         ready-made results for the page: DIR/data/summary.json and
+                                       DIR/data/wallets/<address>.json (worked out from the records)
 
    The bot decides nothing. It copies public records into data/, and rules.js
    works the balances out from them (see the top of rules.js):
@@ -270,6 +272,7 @@ async function listingHistory(after, before) {
       if (l) out.set(l.h, l);
     }
     next = r.next;
+    if (page % 25 === 24) console.log(`  OpenSea listing history: ${page + 1} pages, ${out.size} listings of seekers so far`);
     if (!next) return [...out.values()].sort((a, b) => a.t - b.t || (a.h < b.h ? -1 : 1));
   }
   throw new Error('OpenSea kept sending pages');
@@ -522,13 +525,51 @@ function totals() {
   for (const x of all.slice(0, 15)) console.log(`  ${x.address}  ${Rules.credits(x.units).padStart(10)}  ${x.held} seekers, ${x.held - x.unlisted} listed`);
 }
 
+/** Ready-made results for the page, so a check loads one small file: everything
+    in them is worked out from the records by rules.js, and the records are
+    published next to them for anyone who wants to redo it. */
+function publish(dir) {
+  if (!dir) throw new Error('usage: node bot/bot.js publish DIR');
+  if (!fs.existsSync(file('genesis.json'))) return console.log('no start yet: nothing to publish');
+  const { genesis, listings, head, play } = load();
+  const s = play();
+  const orders = new Map(readLines('orders.jsonl').map(o => [o.h, o]));
+  const out = path.join(dir, 'data', 'wallets');
+  fs.mkdirSync(out, { recursive: true });
+  const byMaker = new Map();
+  for (const l of (genesis.listings || []).concat(listings)) {
+    if (l.e <= s.time || s.owner[l.id] !== l.maker) continue;
+    if (!byMaker.has(l.maker)) byMaker.set(l.maker, []);
+    byMaker.get(l.maker).push(l);
+  }
+  let holders = 0, startTotal = 0, n = 0;
+  for (const x of s.accounts.values()) {
+    if (x.held) holders++;
+    startTotal += x.start;
+    const mine = Rules.seekersOf(s, x.address);
+    fs.writeFileSync(path.join(out, x.address + '.json'), JSON.stringify({
+      address: x.address, time: s.time, units: x.units, unlisted: x.unlisted, held: x.held,
+      start: x.start, earned: x.earned, received: x.received, sent: x.sent, adjusted: x.adjusted,
+      seekers: mine.map(m => [m.id, m.listed ? 1 : 0]), history: x.history,
+      listings: (byMaker.get(x.address) || []).map(l => ({ h: l.h, id: l.id, e: l.e, order: (orders.get(l.h) || {}).parameters || null })),
+    }));
+    n++;
+  }
+  fs.writeFileSync(path.join(dir, 'data', 'summary.json'), JSON.stringify({
+    time: s.time, block: head.block, listingsTime: head.listingsTime, nft: genesis.nft, rules: genesis.rules,
+    start: { block: genesis.block, time: genesis.time, wallets: genesis.holders.length, units: startTotal },
+    totals: { units: s.total, holders, earning: s.supply - s.listedCount, listed: s.listedCount, supply: s.supply },
+  }));
+  console.log(`published ${n} wallets and the summary at block ${head.block}`);
+}
+
 module.exports = { CONFIG, TOPIC, blockAt, blockBefore, ownersAt, moveEvents, cancelEvents, listingFromEvent, seconds, liveAtStart };
 
 if (require.main === module) {
   const [command, argument] = process.argv.slice(2);
-  const commands = { check, run, verify, balance: () => balance(argument), totals };
+  const commands = { check, run, verify, balance: () => balance(argument), totals, publish: () => publish(argument) };
   if (!commands[command]) {
-    console.log('usage: node bot/bot.js check | run | verify | balance 0xADDRESS | totals');
+    console.log('usage: node bot/bot.js check | run | verify | balance 0xADDRESS | totals | publish DIR');
     process.exit(1);
   }
   Promise.resolve(commands[command]()).catch(e => { console.error(e.message || e); process.exit(1); });
