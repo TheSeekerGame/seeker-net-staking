@@ -9,7 +9,7 @@
 name: credits
 on:
   schedule:
-    - cron: '7,22,37,52 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       start:
@@ -92,12 +92,12 @@ jobs:
       - id: deploy
         uses: actions/deploy-pages@v5
       # GitHub's timer (schedule above) is unreliable on this repository, so each
-      # round also starts the next one, 15 minutes after it began. At most one
+      # round also starts the next one, 5 minutes after it began. At most one
       # round waits in line at a time (concurrency), so this never piles up.
-      - name: Next round in 15 minutes
+      - name: Next round in 5 minutes
         if: always() && hashFiles('data/genesis.json') != ''
         run: |
-          wait=$(( 900 - ($(date +%s) - STARTED) ))
+          wait=$(( 300 - ($(date +%s) - STARTED) ))
           if [ "$wait" -gt 0 ]; then sleep "$wait"; fi
           waiting=$(gh run list --workflow credits.yml --json status --jq '[.[] | select(.status == "queued" or .status == "pending" or .status == "waiting")] | length')
           if [ "$waiting" = "0" ]; then gh workflow run credits.yml --ref main; else echo "a round is already waiting"; fi
