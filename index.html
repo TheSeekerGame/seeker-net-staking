@@ -133,7 +133,7 @@
       <div class="tiles">
         <div class="tile"><span class="cap">seekers held</span><b id="held"></b></div>
         <div class="tile"><span class="cap">staked</span><b id="earning" class="staked"></b></div>
-        <div class="tile"><span class="cap">listed</span><b id="listedCount"></b></div>
+        <div class="tile"><span class="cap">listed</span><b id="listedCount" class="listedc"></b></div>
       </div>
     </div>
 
@@ -306,7 +306,7 @@ async function show(input) {
   $('held').textContent = mine.length;
   $('earning').textContent = earning;
   $('listedCount').textContent = listed;
-  $('listedCount').className = listed ? 'listedc' : '';
+  $('listedCount').className = 'listedc';
 
   $('seekersPanel').hidden = !mine.length;
   $('seekers').replaceChildren(...mine.map(m => el('a', {
