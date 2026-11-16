@@ -24,6 +24,7 @@ on:
     branches: [main]
     paths: [index.html, rules.js, og.png, icon.png]
 permissions:
+  actions: write
   contents: write
   pages: write
   id-token: write
@@ -48,6 +49,7 @@ jobs:
           restore-keys: opensea-key-
       - name: Who saves the record
         run: |
+          echo "STARTED=$(date +%s)" >> "$GITHUB_ENV"
           git config user.name "seeker-credits-bot"
           git config user.email "seeker-credits-bot@users.noreply.github.com"
       - name: One round
@@ -89,3 +91,14 @@ jobs:
           path: _site
       - id: deploy
         uses: actions/deploy-pages@v5
+      # GitHub's timer (schedule above) is unreliable on this repository, so each
+      # round also starts the next one, 15 minutes after it began. At most one
+      # round waits in line at a time (concurrency), so this never piles up.
+      - name: Next round in 15 minutes
+        if: always() && hashFiles('data/genesis.json') != ''
+        run: |
+          wait=$(( 900 - ($(date +%s) - STARTED) ))
+          if [ "$wait" -gt 0 ]; then sleep "$wait"; fi
+          gh workflow run credits.yml --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
