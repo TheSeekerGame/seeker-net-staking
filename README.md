@@ -22,6 +22,7 @@ the same balance for every wallet, to the unit.
 | `data/orders.jsonl` | the signed orders behind those listings, where OpenSea still served them (an archive; the rules never read it) |
 | `data/head.json` | how far the copy goes |
 | `rules.js` | the rules: turns the files above into every balance. Used by the bot and by the page |
+| `og.png`, `icon.png` | the picture shown when the link is shared, and the tab icon (seeker art from the collection's layers) |
 | `index.html` | the page: type an address, see its balance, what it earns and its history; end your listings on-chain |
 | `bot/bot.js` | the bot. Runs a few times an hour (`.github/workflows/credits.yml`) and only copies records |
 | `bot/test.js` | tests of the rules: `node --test bot/test.js` |

@@ -23,7 +23,7 @@ on:
         default: false
   push:
     branches: [main]
-    paths: [index.html, rules.js]
+    paths: [index.html, rules.js, og.png, icon.png]
 permissions:
   contents: write
   pages: write
@@ -78,7 +78,7 @@ jobs:
           git pull -q --rebase
           git push -q
       - name: The site
-        run: mkdir -p _site data && cp -r index.html rules.js data _site/
+        run: mkdir -p _site data && cp -r index.html rules.js og.png icon.png data _site/
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
