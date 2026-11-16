@@ -29,14 +29,15 @@
    2. Every seeker that is not listed earns its owner 1 credit per day, counted
       by the second. A listed seeker earns nothing.
    3. A seeker is listed while it has at least one live OpenSea listing. A
-      listing is live from the moment it was posted (or its signed start time,
+      listing is valid from the moment it was posted (or its signed start time,
       if later) until the first of:
         - the end date it was signed with,
-        - the seeker leaving the lister's wallet,
         - an on-chain cancellation: Seaport's OrderCancelled for that order, or
           CounterIncremented by the lister (which ends all the listings they
           posted before it).
-      A listing counts only if the lister holds the seeker when it goes live.
+      A valid listing is live whenever its lister holds the seeker: it pauses
+      while the seeker is in another wallet and counts again if it comes back,
+      since it can then be bought again.
       A cancellation that doesn't go on-chain leaves no public record of when it
       happened, so it does not end a listing early.
    4. When a seeker changes wallet (a sale or a plain transfer), 7 of the
@@ -66,12 +67,14 @@
     const perSecond = R.perDay;           // units a seeker earns per second
     const N = genesis.supply;
     const owner = new Array(N + 1).fill(null);
-    const live = new Map();               // order hash -> listing, while live
+    const valid = new Map();              // order hash -> listing, from when it is posted until its end date or cancellation
+    const validOn = Array.from({ length: N + 1 }, () => new Set());  // seeker -> valid order hashes
+    const live = new Map();               // order hash -> listing, while valid and its lister holds the seeker
     const liveOn = Array.from({ length: N + 1 }, () => new Set());   // seeker -> live order hashes
     const cancelled = new Set();          // order hashes cancelled on-chain
     const counterAt = new Map();          // lister -> time of their last CounterIncremented
     const accounts = new Map();
-    const spans = new Map();              // order hash -> [live from, live until] (until null while live)
+    const spans = new Map();              // order hash -> [[live from, live until], ...] (until null while live)
     let now = genesis.time;
 
     function account(a) {
@@ -91,12 +94,31 @@
       x.since = now;
       return x;
     }
-    // rule 3: a listing stops being live
+    // rule 3: a listing goes live (its lister holds the seeker), or stops being live
+    function start(l) {
+      if (liveOn[l.id].size === 0) {
+        const x = settle(account(l.maker));
+        x.unlisted--;
+        x.history.push({ t: now, k: 'list', id: l.id, d: 0, until: l.e });
+      }
+      live.set(l.h, l);
+      liveOn[l.id].add(l.h);
+      if (!spans.has(l.h)) spans.set(l.h, []);
+      spans.get(l.h).push([now, null]);
+    }
+    function invalidate(h, why) {
+      const l = valid.get(h);
+      if (!l) return;
+      valid.delete(h);
+      validOn[l.id].delete(h);
+      end(h, why);
+    }
     function end(h, why) {
       const l = live.get(h);
       if (!l) return;
       live.delete(h);
-      spans.get(h)[1] = now;
+      const s = spans.get(h);
+      s[s.length - 1][1] = now;
       liveOn[l.id].delete(h);
       if (liveOn[l.id].size === 0 && why !== 'moved') {
         const x = settle(account(owner[l.id]));
@@ -122,9 +144,11 @@
     for (const l of genesis.listings || []) {
       if (owner[l.id] !== l.maker) throw new Error(`start: listing ${l.h} is not by the holder of seeker ${l.id}`);
       if (liveOn[l.id].size === 0) account(l.maker).unlisted--;
+      valid.set(l.h, l);
+      validOn[l.id].add(l.h);
       live.set(l.h, l);
       liveOn[l.id].add(l.h);
-      spans.set(l.h, [genesis.time, null]);
+      spans.set(l.h, [[genesis.time, null]]);
       steps.push({ t: l.e, phase: 0, key: l.h, end: l.h });
     }
 
@@ -149,19 +173,14 @@
     for (const step of steps) {
       if (until !== undefined && step.t > until) break;
       now = Math.max(now, step.t);
-      if (step.end) { end(step.end, 'ended'); continue; }
+      if (step.end) { invalidate(step.end, 'ended'); continue; }
 
       if (step.l) {                                         // a listing is posted
         const l = step.l;
-        if (cancelled.has(l.h) || owner[l.id] !== l.maker || l.t < (counterAt.get(l.maker) ?? -Infinity)) continue;
-        if (liveOn[l.id].size === 0) {
-          const x = settle(account(l.maker));
-          x.unlisted--;
-          x.history.push({ t: now, k: 'list', id: l.id, d: 0, until: l.e });
-        }
-        live.set(l.h, l);
-        liveOn[l.id].add(l.h);
-        spans.set(l.h, [now, null]);
+        if (cancelled.has(l.h) || l.t < (counterAt.get(l.maker) ?? -Infinity)) continue;
+        valid.set(l.h, l);
+        validOn[l.id].add(l.h);
+        if (owner[l.id] === l.maker) start(l);
         continue;
       }
 
@@ -174,18 +193,19 @@
         from.units -= give; from.sent += give;
         to.units += give; to.received += give;
         const wasListed = liveOn[e.id].size > 0;
-        for (const h of [...liveOn[e.id]]) end(h, 'moved');  // the lister no longer holds it
+        for (const h of [...liveOn[e.id]]) end(h, 'moved');  // the lister no longer holds it: paused
         from.held--; to.held++; to.unlisted++;
         if (!wasListed) from.unlisted--;
         owner[e.id] = e.to;
         from.history.push({ t: now, k: 'out', id: e.id, d: -give, who: e.to, tx: e.tx });
         to.history.push({ t: now, k: 'in', id: e.id, d: give, who: e.from, tx: e.tx });
+        for (const h of [...validOn[e.id]]) if (valid.get(h).maker === e.to) start(valid.get(h));   // back with its lister
       } else if (e.k === 'cancel') {                        // Seaport OrderCancelled
         cancelled.add(e.h);
-        end(e.h, 'cancelled');
+        invalidate(e.h, 'cancelled');
       } else if (e.k === 'counter') {                       // Seaport CounterIncremented: all of the lister's orders so far
         counterAt.set(e.a, e.t);
-        for (const [h, l] of [...live]) if (l.maker === e.a) end(h, 'cancelled');
+        for (const [h, l] of [...valid]) if (l.maker === e.a) invalidate(h, 'cancelled');
       } else if (e.k === 'adjust') {                        // a correction made by hand, with its reason
         if (!Number.isInteger(e.credits)) throw new Error(`a correction is in whole credits (${e.note})`);
         const x = settle(account(e.a));

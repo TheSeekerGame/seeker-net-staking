@@ -52,7 +52,8 @@ whole numbers (1 credit = 86,400 units, one per seeker per second).
 Only an on-chain cancellation ends a listing early. OpenSea's normal cancel on
 Robinhood Chain is one (you approve a small transaction); a cancel that doesn't
 go on-chain leaves no record of when it happened, so it can't count. A listing
-otherwise counts until its end date unless the seeker moves. The exact rules are at the
+otherwise counts until its end date, whenever its lister holds the seeker: it pauses
+while the seeker is in another wallet and counts again if it comes back. The exact rules are at the
 top of `rules.js` and, in plain words, on the page.
 
 ## Check it yourself

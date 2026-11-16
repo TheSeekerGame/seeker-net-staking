@@ -99,7 +99,7 @@ test('a cancellation before the listing is posted keeps it from ever going live'
   assert.equal(bal(s, A), 7 + 10);
 });
 
-test('a listing by someone who does not hold the seeker counts for nothing', () => {
+test('a listing by someone who never holds the seeker counts for nothing', () => {
   const s = play(genesis([A, B]), [], [listing('0xh1', 1, B, 1, 30)], 10);
   assert.equal(bal(s, A), 7 + 10);
   assert.equal(bal(s, B), 7 + 10);
@@ -112,10 +112,26 @@ test('a sale ends the listing: the buyer earns from the moment it arrives', () =
   assert.equal(s.listed[1], 0);
 });
 
-test('a listing ended by a sale does not come back if the seeker returns before its end date', () => {
+test('a listing pauses while the seeker is in another wallet and counts again when it comes back', () => {
   const s = play(genesis([A]), [move(2, 1, A, B), move(3, 1, B, A)], [listing('0xh1', 1, A, 1, 30)], 10);
-  assert.equal(s.listed[1], 0);
-  assert.equal(bal(s, A), (7 + 1 - 7) + 7 + 7);                         // earned 1, sold (-7), got 7 back, earned days 3-10
+  assert.equal(s.listed[1], 1);
+  assert.equal(bal(s, A), (7 + 1 - 7) + 7);                             // earned day 0-1, sold (-7), got 7 back, listed again from day 3
+  assert.equal(bal(s, B), 7 + 1 - 7);                                   // B held it unlisted for a day
+  assert.deepEqual(s.spans.get('0xh1'), [[at(1), at(2)], [at(3), null]]);
+  // a listing that ended while the seeker was away does not come back
+  const t = play(genesis([A]), [move(2, 1, A, B), move(5, 1, B, A)], [listing('0xh1', 1, A, 1, 4)], 10);
+  assert.equal(t.listed[1], 0);
+  // nor one cancelled on-chain while away
+  const u = play(genesis([A]), [move(2, 1, A, B), cancel(2.5, '0xh1', A), move(3, 1, B, A)], [listing('0xh1', 1, A, 1, 30)], 10);
+  assert.equal(u.listed[1], 0);
+  // a listing posted by someone who gets the seeker later counts from then
+  const v = play(genesis([A, B]), [move(4, 1, A, B)], [listing('0xh1', 1, B, 1, 30)], 10);
+  assert.equal(v.listed[1], 1);
+  assert.equal(bal(v, B), 7 + 10 + 7);                                  // seeker 2 earned all along; seeker 1 arrived listed
+  // and moving out and back is no way to earn while listed
+  const w = play(genesis([A, C]), [move(2, 1, A, C), move(2.001, 1, C, A)], [listing('0xh1', 1, A, 1, 30)], 10);
+  assert.equal(w.listed[1], 1);
+  assert.ok(bal(w, A) < 7 + 1.01);
 });
 
 test('a move takes 7 of the sender\'s credits to the new owner; a short seller gives what they have', () => {
@@ -225,6 +241,12 @@ test('overlapping relistings are left out, and every balance stays exactly the s
   assert.ok(kept.length < L.length / 10, `kept ${kept.length} of ${L.length}`);
   const numbers = s => [...s.accounts.values()].map(x => [x.address, x.units, x.earned, x.unlisted].join()).sort().join('|');
   assert.equal(numbers(Rules.replay(g, chain, kept, until)), numbers(Rules.replay(g, chain, L, until)));
+  // a listing live twice (its seeker went away and came back) is kept
+  const twice = [...L, { h: '0xf1', id: 2, maker: A, t: at(3), s: 0, e: at(4) }];
+  const back = chain.concat(move(3.2, 2, A, D), move(3.4, 2, D, A));
+  const keptBack = prune(g, back, twice, until);
+  assert.ok(keptBack.some(l => l.h === '0xf1'));
+  assert.equal(numbers(Rules.replay(g, back, keptBack, until)), numbers(Rules.replay(g, back, twice, until)));
   // listings that can still matter are always kept
   const open = [...L, { h: '0xe1', id: 2, maker: A, t: at(4.9), s: 0, e: at(6) }];
   assert.ok(prune(g, chain, open, until).some(l => l.h === '0xe1'));

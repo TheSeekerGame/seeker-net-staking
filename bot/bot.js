@@ -343,9 +343,10 @@ function prune(genesis, chain, listings, until) {
   const byId = new Map();
   const keep = new Set();
   for (const l of listings) {
-    const span = full.spans.get(l.h);
-    if (!span) { if (l.e > until) keep.add(l.h); continue; }        // never live: matters only if it still can be
-    if (span[1] === null || l.e > until) { keep.add(l.h); continue; }  // still live, or could still matter
+    const runs = full.spans.get(l.h);
+    if (!runs) { if (l.e > until) keep.add(l.h); continue; }        // never live: matters only if it still can be
+    if (runs.length > 1 || l.e > until) { keep.add(l.h); continue; }  // live more than once, or could still matter
+    const span = runs[0];
     if (!byId.has(l.id)) byId.set(l.id, []);
     byId.get(l.id).push({ h: l.h, a: span[0], b: span[1] });
   }
