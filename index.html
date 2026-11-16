@@ -169,12 +169,10 @@
 
   <div class="panel" id="endPanel">
     <h2>How to delist</h2>
-    <p class="muted" style="margin:0 0 12px">A normal delist on OpenSea (its quick cancel) is not enough: it happens off-chain and leaves no public record, so your listing keeps counting until its end date.</p>
+    <p style="margin:0 0 12px">On OpenSea, open <b>More → Profile → Listings</b>, tick the listing, click <b>Cancel Listings</b>, and approve the small transaction in your wallet (a fraction of a cent). That cancels it on-chain, and your seeker earns again right away. To cancel everything at once, click <b>Cancel all listings and offers</b> (top right) instead: that also cancels your offers and your listings in other collections on Robinhood Chain.</p>
+    <p class="muted" style="margin:0 0 12px">Only a cancel you approve in your wallet counts. A listing replaced without a wallet transaction (for example by lowering its price) keeps counting until its end date.</p>
     <p style="margin:0 0 12px"><b>Tip:</b> when you list, pick a short duration (OpenSea lets you choose an hour or a day). If you might change your mind, don't list for weeks.</p>
-    <p style="margin:0 0 12px">To delist your seekers on-chain, on OpenSea open <b>More → Profile → Listings</b>, click <b>Cancel all listings and offers</b> (top right), and approve in your wallet. It costs a fraction of a cent, and your seekers earn again right away.</p>
-    <p class="muted" style="margin:0 0 12px">Note: this cancels all your OpenSea listings and offers on Robinhood Chain, in every collection.</p>
-    <p class="muted" style="margin:0 0 12px">A sale or transfer also ends the listing: the seeker arrives staked for its new owner.</p>
-    <p class="muted" style="margin:0">A tool for cancelling individual SEEKER NET listings will be available here soon.</p>
+    <p class="muted" style="margin:0">A sale or transfer also ends the listing: the seeker arrives staked for its new owner.</p>
   </div>
 
   <div class="panel">
@@ -187,13 +185,13 @@
       <dt>What "listed" means</dt>
       <dd>A seeker is listed from the moment its holder lists it on OpenSea (any price, private listings too) until that listing's end date, unless the seeker is sold or moved first, or the listing is cancelled on-chain. Listed seekers earn nothing.</dd>
       <dt>Ending a listing early</dt>
-      <dd>A normal delist on OpenSea is not enough: its quick cancel happens off-chain and leaves no public record, so the listing keeps counting until its end date. To stop it sooner, delist on-chain (see "How to delist" above), or pick a short duration when you list.</dd>
+      <dd>Only an on-chain cancel ends a listing before its end date. On OpenSea that's the normal cancel, which asks you to approve a small transaction (see "How to delist" above). A cancel that doesn't go through your wallet leaves no public record, so the listing keeps counting until its end date.</dd>
       <dt>Selling and moving</dt>
       <dd>When a seeker changes wallet (a sale, a gift, or a move between your own wallets), 7 credits go from the sender to the new owner, or all the sender has if fewer. Moves count in chain order: a wallet with 10 credits that sells two seekers gives 7, then 3. Flipping costs nothing: you get 7 when you buy and pass 7 on when you sell.</dd>
       <dt>Where credits come from</dt>
       <dd>Only from the start and from unlisted seekers. Moves just hand credits over. Credits can't be sent on their own and never go below zero.</dd>
       <dt>Why it works this way</dt>
-      <dd>So anyone can check every number. Balances follow only from permanent public records, the chain and OpenSea's listing history, so anyone who replays them gets exactly the same result for every wallet, to the second. When the bot runs changes nothing. OpenSea's quick cancel leaves no such record, which is why it can't count.</dd>
+      <dd>So anyone can check every number. Balances follow only from permanent public records, the chain and OpenSea's listing history, so anyone who replays them gets exactly the same result for every wallet, to the second. When the bot runs changes nothing. A cancel that doesn't go on-chain leaves no such record, which is why only on-chain cancels count.</dd>
       <dt>Check it yourself</dt>
       <dd>This page computes every balance in your browser from public files: <a href="data/genesis.json">the start</a>, <a href="data/events.jsonl">the moves</a>, <a href="data/cancels.jsonl">the on-chain cancellations</a> and <a href="data/listings.jsonl">the listings</a>, with <a href="rules.js">one short rules file</a>. The bot only copies these records, and its verify command rebuilds them from the chain and OpenSea to prove they match<span id="repo"></span>. Listings from the last hour can still be added as OpenSea's history catches up; older records are final. Nothing in the record is ever changed or removed; a correction, if ever needed, is added as its own entry with the reason.</dd>
     </dl>
