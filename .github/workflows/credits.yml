@@ -48,6 +48,7 @@ jobs:
           key: opensea-key-none
           restore-keys: opensea-key-
       - name: One round
+        timeout-minutes: 30
         run: |
           if [ -f data/genesis.json ] || [ -f data/start.json ] || [ "${{ inputs.start }}" = "true" ]; then
             node bot/bot.js run
@@ -59,6 +60,7 @@ jobs:
           OPENSEA_API_KEY: ${{ secrets.OPENSEA_API_KEY }}
           START: ${{ inputs.start }}
       - name: Verify
+        timeout-minutes: 30
         if: inputs.verify && hashFiles('data/genesis.json') != ''
         run: node bot/bot.js verify
         env:

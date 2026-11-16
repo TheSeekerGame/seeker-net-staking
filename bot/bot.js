@@ -260,20 +260,28 @@ function listingFromEvent(ev) {
 
 /** OpenSea's listing history of the collection, posted in [after, before], oldest first. */
 async function listingHistory(after, before) {
-  const out = new Map();
-  let next = null;
+  const out = new Map(), cursors = new Set();
+  let next = null, events = 0, oldest = Infinity;
   for (let page = 0; page < 5000; page++) {
     const q = `/events/collection/${CONFIG.slug}?event_type=listing&limit=200&after=${after}&before=${before}` +
               (next ? '&next=' + encodeURIComponent(next) : '');
     const r = await opensea(q);
     if (!Array.isArray(r.asset_events)) throw new Error('OpenSea sent no list of events');
     for (const ev of r.asset_events) {
+      events++;
+      oldest = Math.min(oldest, seconds(ev.event_timestamp) || oldest);
       const l = listingFromEvent(ev);
       if (l) out.set(l.h, l);
     }
+    if (page === 0 && r.asset_events[0]) console.log('  OpenSea: first event as sent: ' + JSON.stringify(r.asset_events[0]).slice(0, 700));
+    if (page % 10 === 9) console.log(`  OpenSea listing history: ${page + 1} pages, ${events} events, ${out.size} listings of seekers, back to ${new Date(oldest * 1000).toISOString()}`);
     next = r.next;
-    if (page % 25 === 24) console.log(`  OpenSea listing history: ${page + 1} pages, ${out.size} listings of seekers so far`);
-    if (!next) return [...out.values()].sort((a, b) => a.t - b.t || (a.h < b.h ? -1 : 1));
+    const done = !next || !r.asset_events.length || cursors.has(next) || oldest < after;
+    if (next) cursors.add(next);
+    if (done) {
+      console.log(`  OpenSea listing history: ${page + 1} pages, ${events} events, ${out.size} listings of seekers`);
+      return [...out.values()].sort((a, b) => a.t - b.t || (a.h < b.h ? -1 : 1));
+    }
   }
   throw new Error('OpenSea kept sending pages');
 }
