@@ -89,8 +89,10 @@
   .sum tr:last-child td, #activity tr:last-child td { padding-bottom: 0; text-box-trim: trim-end; text-box-edge: cap alphabetic; }
   .sum tr.total td { border-top: 1px solid var(--line); font-weight: 700; padding-top: 9px; color: var(--text); }
   /* room below the last row for letters that hang under the line (g, y), given back underneath */
-  .endRow { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-  #endStatus { flex: 1 1 260px; }
+  .steps { margin: 0; padding-left: 22px; }
+  .steps li { margin: 0 0 8px; }
+  .steps li:last-child { margin-bottom: 0; }
+  .steps b { font-weight: 700; color: var(--text); }
   .scroll { max-height: 420px; overflow: auto; scrollbar-color: var(--line) transparent; padding-bottom: 5px; margin-bottom: -5px; }
   dl { margin: 0; }
   dt { color: var(--text); margin: 16px 0 4px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
@@ -167,8 +169,12 @@
 
   <div class="panel" id="endPanel">
     <h2>Force-cancel all listings</h2>
-    <p class="muted" style="margin:0 0 14px">Delisting on OpenSea is not enough: its quick cancel happens off-chain and leaves no public record, so your listing keeps counting until its end date. This button cancels it on-chain instead: one transaction, approved in your wallet, for your SEEKER NET listings only (nothing in other collections is touched). It costs a fraction of a cent, and your seekers earn again right away.</p>
-    <div class="endRow"><button type="button" id="endAll">Force-cancel all listings</button><span id="endStatus" class="muted"></span></div>
+    <p class="muted" style="margin:0 0 12px">Delisting on OpenSea is not enough: its quick cancel happens off-chain and leaves no public record, so your listing keeps counting until its end date. Cancel on-chain instead, in either of two ways:</p>
+    <ol class="steps">
+      <li><b>On OpenSea:</b> Profile → Listings → filter Robinhood Chain → Cancel all listings and offers → confirm in your wallet.</li>
+      <li><b>On the Robinhood Chain explorer:</b> open <a href="https://robinhoodchain.blockscout.com/address/0x0000000000000068F116a894984e2DB1123eB395?tab=write_contract" target="_blank" rel="noopener">Seaport</a> → Connect wallet → incrementCounter → Write.</li>
+    </ol>
+    <p class="muted" style="margin:12px 0 0">Either is one small on-chain transaction, and your seekers earn again from that block. Both cancel all your OpenSea listings and offers on Robinhood Chain, in every collection.</p>
   </div>
 
   <div class="panel">
@@ -181,7 +187,7 @@
       <dt>What "listed" means</dt>
       <dd>A seeker is listed from the moment its holder lists it on OpenSea (any price, private listings too) until that listing's end date, unless the seeker is sold or moved first, or the listing is cancelled on-chain. Listed seekers earn nothing.</dd>
       <dt>Ending a listing early</dt>
-      <dd>Delisting on OpenSea is not enough. OpenSea's quick cancel happens off-chain and leaves no public record, so the listing keeps counting until its end date. To stop it sooner, use "Force-cancel all listings" above, or pick a short duration when you list.</dd>
+      <dd>Delisting on OpenSea is not enough. OpenSea's quick cancel happens off-chain and leaves no public record, so the listing keeps counting until its end date. To stop it sooner, cancel on-chain (see "Force-cancel all listings" above), or pick a short duration when you list.</dd>
       <dt>Selling and moving</dt>
       <dd>When a seeker changes wallet (a sale, a gift, or a move between your own wallets), 7 credits go from the sender to the new owner, or all the sender has if fewer. Moves count in chain order: a wallet with 10 credits that sells two seekers gives 7, then 3. Flipping costs nothing: you get 7 when you buy and pass 7 on when you sell.</dd>
       <dt>Where credits come from</dt>
@@ -369,87 +375,6 @@ async function show(input) {
   $('result').hidden = false;
 }
 
-// Force-cancel all listings: Seaport's cancel() for exactly this wallet's SEEKER NET
-// listings, rebuilt from the signed orders the bot archives (data/orders.jsonl)
-const SEAPORT = '0x0000000000000068F116a894984e2DB1123eB395';
-const RPC = 'https://rpc.mainnet.chain.robinhood.com';
-const CHAIN = { chainId: '0x1237', chainName: 'Robinhood Chain', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-  rpcUrls: [RPC], blockExplorerUrls: [EXPLORER] };
-const ITEM = '(uint8 itemType,address token,uint256 identifierOrCriteria,uint256 startAmount,uint256 endAmount)';
-const CITEM = '(uint8 itemType,address token,uint256 identifierOrCriteria,uint256 startAmount,uint256 endAmount,address recipient)';
-const ORDER = `(address offerer,address zone,${ITEM}[] offer,${CITEM}[] consideration,uint8 orderType,uint256 startTime,uint256 endTime,bytes32 zoneHash,uint256 salt,bytes32 conduitKey,uint256 counter)`;
-async function loadEthers() {
-  if (window.ethers) return window.ethers;
-  await new Promise((ok, fail) => {
-    const tag = Object.assign(document.createElement('script'), { src: 'https://cdnjs.cloudflare.com/ajax/libs/ethers/6.17.0/ethers.umd.min.js' });
-    tag.onload = ok; tag.onerror = () => fail(new Error('the signing library could not be loaded'));
-    document.head.append(tag);
-  });
-  return window.ethers;
-}
-const components = p => ({ offerer: p.offerer, zone: p.zone,
-  offer: p.offer.map(i => ({ itemType: i.itemType, token: i.token, identifierOrCriteria: i.identifierOrCriteria, startAmount: i.startAmount, endAmount: i.endAmount })),
-  consideration: p.consideration.map(i => ({ itemType: i.itemType, token: i.token, identifierOrCriteria: i.identifierOrCriteria, startAmount: i.startAmount, endAmount: i.endAmount, recipient: i.recipient })),
-  orderType: p.orderType, startTime: p.startTime, endTime: p.endTime, zoneHash: p.zoneHash, salt: p.salt, conduitKey: p.conduitKey, counter: p.counter });
-async function chainCall(to, input) {
-  const r = await (await fetch(RPC, { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to, data: input }, 'latest'] }) })).json();
-  if (!r.result) throw new Error('the chain did not answer');
-  return r.result;
-}
-async function endAll() {
-  const out = $('endStatus'), button = $('endAll');
-  const tell = (text, cls) => { out.textContent = text; out.className = cls || 'muted'; };
-  if (!window.ethereum) return tell('No wallet found. Open this page in a browser with a wallet such as MetaMask.', 'bad');
-  if (!data) return tell('Available once balances are showing.', 'bad');
-  button.disabled = true;
-  try {
-    const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' });
-    const from = account.toLowerCase();
-    // this wallet's SEEKER NET listings that can still count: before their end date, on seekers it holds
-    const w = await wallet(from).catch(e => { if (e.status === 404) return { listings: [] }; throw e; });
-    const nowS = Date.now() / 1000;
-    const mine = w.listings.filter(l => l.e > nowS);
-    if (!mine.length) return tell('This wallet has no SEEKER NET listings counting right now. Listed in the last 15 minutes? Try again after the next update.');
-    const ethers = await loadEthers();
-    const seaport = new ethers.Interface([`function cancel(${ORDER}[] orders) returns (bool)`, `function getOrderHash(${ORDER} order) view returns (bytes32)`]);
-    const ready = [], missing = [];
-    for (const l of mine) {
-      if (!l.order) { missing.push(l); continue; }
-      const c = components(l.order);
-      const h = seaport.decodeFunctionResult('getOrderHash', await chainCall(SEAPORT, seaport.encodeFunctionData('getOrderHash', [c])))[0];
-      if (h.toLowerCase() === l.h) ready.push([l, c]); else missing.push(l);    // only orders that are exactly the listing on record
-    }
-    if (!ready.length) return tell(`Not ready yet for ${missing.map(l => '#' + l.id).join(', ')}: the bot saves new listings within 15 minutes. Try again then.`, 'bad');
-    try {
-      await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: CHAIN.chainId }] });
-    } catch (e) {
-      if (e.code !== 4902) throw e;
-      await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [CHAIN] });
-    }
-    const which = ready.map(([l]) => '#' + l.id).join(', ');
-    tell(`Approve in your wallet: cancels the listing${ready.length === 1 ? '' : 's'} of ${which}…`);
-    const tx = await window.ethereum.request({ method: 'eth_sendTransaction', params: [{ from: account, to: SEAPORT, data: seaport.encodeFunctionData('cancel', [ready.map(([, c]) => c)]) }] });
-    tell('Sent. Waiting for confirmation…');
-    const later = missing.length ? ` ${missing.map(l => '#' + l.id).join(', ')} wasn't ready yet: try again in 15 minutes.` : '';
-    for (let n = 0; n < 120; n++) {
-      const r = await window.ethereum.request({ method: 'eth_getTransactionReceipt', params: [tx] });
-      if (r) {
-        out.replaceChildren(r.status === '0x1' ? `Done: ${which} cancelled on-chain. The page shows it after its next update.${later} ` : 'The transaction failed. ',
-          el('a', { href: `${EXPLORER}/tx/${tx}`, target: '_blank', rel: 'noopener', textContent: 'See it on the explorer' }));
-        out.className = r.status === '0x1' ? 'ok' : 'bad';
-        return;
-      }
-      await new Promise(f => setTimeout(f, 2000));
-    }
-    out.replaceChildren('Sent, not confirmed yet. ', el('a', { href: `${EXPLORER}/tx/${tx}`, target: '_blank', rel: 'noopener', textContent: 'Check it on the explorer' }));
-  } catch (e) {
-    tell(e.code === 4001 ? 'Cancelled in the wallet: nothing was sent.' : 'It did not go through: ' + (e.message || e), e.code === 4001 ? 'muted' : 'bad');
-  } finally {
-    button.disabled = false;
-  }
-}
-$('endAll').addEventListener('click', endAll);
 
 $('form').addEventListener('submit', e => {
   e.preventDefault();
