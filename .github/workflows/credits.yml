@@ -99,6 +99,7 @@ jobs:
         run: |
           wait=$(( 900 - ($(date +%s) - STARTED) ))
           if [ "$wait" -gt 0 ]; then sleep "$wait"; fi
-          gh workflow run credits.yml --ref main
+          waiting=$(gh run list --workflow credits.yml --json status --jq '[.[] | select(.status == "queued" or .status == "pending" or .status == "waiting")] | length')
+          if [ "$waiting" = "0" ]; then gh workflow run credits.yml --ref main; else echo "a round is already waiting"; fi
         env:
           GH_TOKEN: ${{ github.token }}
