@@ -119,9 +119,8 @@ async function blockBefore(time) {
 }
 
 /** Logs in blocks from..to, in chain order; the range is split when the RPC wants it smaller. */
-async function logs(filter, from, to) {
+async function logs(filter, from, to, span = 5000000) {
   const out = [];
-  let span = 5000000;
   for (let lo = from; lo <= to;) {
     const hi = Math.min(lo + span - 1, to);
     try {
@@ -146,7 +145,7 @@ async function seaportLogs(from, to, offerers) {
     const list = [...offerers];
     for (let i = 0; i < list.length; i += 100) {
       const who = list.slice(i, i + 100).map(a => '0x' + a.slice(2).padStart(64, '0'));
-      out.push(...await logs({ address, topics: [[TOPIC.cancel, TOPIC.counter], who] }, from, to));
+      out.push(...await logs({ address, topics: [[TOPIC.cancel, TOPIC.counter], who] }, from, to, 100000));   // the RPC takes lists of addresses over at most 100,000 blocks
     }
   }
   return out.sort(chainOrder);
