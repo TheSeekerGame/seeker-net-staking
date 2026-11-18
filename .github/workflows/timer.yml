@@ -1,12 +1,15 @@
 # The timer: starts a round of the credits bot every 5 minutes. GitHub's own
-# schedule hasn't fired on this repository, so this small workflow waits 5
-# minutes, starts the next timer, then starts a round. It runs apart from the
-# rounds, so waiting never holds up a round or a site update.
+# schedule only fires every few hours on this repository, so this workflow is
+# the clock: one run stays up for about 5.5 hours, starting a round every 5
+# minutes, then hands over to a new run of itself.
 #
-# Only one timer ever runs: a new one waits for the running one to finish (and
-# replaces any other waiting one). The schedule below is a fallback that
-# restarts the chain if it ever breaks, once GitHub's schedule works here.
-# To start it (once): Actions > timer > Run workflow. To stop it: disable the workflow.
+# GitHub sometimes creates a run that never starts (it stays "queued" with no
+# job). So the hand-over is checked: the old run keeps going, and keeps asking
+# for a new one, until it sees its successor actually running. If two timers
+# ever run at once, the older one stops, so rounds never double up.
+#
+# The schedule below is a last fallback that restarts the clock if it ever stops.
+# To start it by hand: Actions > timer > Run workflow. To stop it: disable the workflow.
 name: timer
 on:
   workflow_dispatch:
@@ -14,22 +17,36 @@ on:
     - cron: '17,47 * * * *'
 permissions:
   actions: write
-concurrency:
-  group: timer
-  cancel-in-progress: false
 jobs:
   tick:
     runs-on: ubuntu-latest
-    timeout-minutes: 8     # a stuck run never holds up the next timer for long
+    timeout-minutes: 355
     steps:
-      - name: Wait 5 minutes, start the next timer, start a round
-        run: |
-          sleep 300
-          # each with a few tries, and the next timer first, so one failed call never stops the chain
-          next=no; round=no
-          for i in 1 2 3 4 5; do gh workflow run timer.yml --repo "$GITHUB_REPOSITORY" --ref main && { next=yes; break; }; sleep 15; done
-          for i in 1 2 3; do gh workflow run credits.yml --repo "$GITHUB_REPOSITORY" --ref main && { round=yes; break; }; sleep 15; done
-          # shows red in Actions if the chain broke or a round could not be started
-          [ "$next" = yes ] && [ "$round" = yes ]
+      - name: Start a round every 5 minutes, then hand over
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ME: ${{ github.run_id }}
+        run: |
+          # how many timer runs newer than this one are actually running (0 if GitHub can't be asked)
+          newer() {
+            n=$(gh api "repos/$REPO/actions/workflows/timer.yml/runs?status=in_progress&per_page=30" \
+                  -q "[.workflow_runs[] | select(.id > $ME)] | length" 2>/dev/null) || n=0
+            echo "${n:-0}"
+          }
+          dispatch() {
+            for i in 1 2 3 4 5; do gh workflow run "$1" --repo "$REPO" --ref main && return 0; sleep 15; done
+            echo "could not start $1"; return 1
+          }
+          begun=$SECONDS
+          while true; do
+            sleep 300
+            if [ "$(newer)" -gt 0 ]; then echo "a newer timer is running: this one stops"; exit 0; fi
+            dispatch credits.yml || true
+            age=$(( SECONDS - begun ))
+            if [ $age -ge 19800 ]; then                # after 5.5 hours: ask for the next timer, every 5 minutes until it runs
+              echo "handing over to a new timer"
+              dispatch timer.yml || true
+            fi
+            if [ $age -ge 20700 ]; then echo "no new timer started in 15 minutes"; exit 1; fi
+          done
