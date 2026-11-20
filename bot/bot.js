@@ -500,10 +500,36 @@ async function run() {
   const chain = events.concat(moves, cancels, freshCancels);
   const kept = prune(genesis, chain, listings.concat(added), block.time);
   const after = Rules.replay(genesis, chain, kept, block.time);   // throws if anything is inconsistent
+
+  // a check, not a rule: the seekers the record counts as listed, against those OpenSea shows as listed right now
+  // (they can differ: listings replaced without a transaction still count, and bots' short listings come and go between rounds)
+  let opensea = head.opensea || null;
+  if (!failures) try {
+    const orders = await currentOrders(), theirs = new Set(), shown = new Set();
+    for (const o of orders) {
+      const item = o.parameters && o.parameters.offer && o.parameters.offer[0];
+      if (o.status !== 'ACTIVE' || !item || String(item.token).toLowerCase() !== CONFIG.nft) continue;
+      theirs.add(Number(item.identifierOrCriteria));
+      shown.add(o.h);
+    }
+    const ours = [];
+    for (let id = 1; id <= after.supply; id++) if (after.listed[id]) ours.push(id);
+    const onlyOurs = ours.filter(id => !theirs.has(id)), onlyTheirs = [...theirs].filter(id => !after.listed[id]).sort((x, y) => x - y);
+    opensea = { time: now(), listed: theirs.size, onlyOurs, onlyTheirs };
+    const why = id => {
+      const mine = [...after.live.values()].filter(l => l.id === id);
+      const last = mine.reduce((m, l) => Math.max(m, l.e), 0);
+      return `#${id} (${mine.length} live on record, ${mine.filter(l => shown.has(l.h)).length} shown by OpenSea, last ends ${new Date(last * 1000).toISOString().slice(0, 16)})`;
+    };
+    console.log(`OpenSea shows ${theirs.size} seekers listed, the record ${ours.length}. Only in the record: ${onlyOurs.map(why).join(', ') || 'none'}. ` +
+                `Only on OpenSea: ${onlyTheirs.map(id => '#' + id).join(' ') || 'none'}`);
+  } catch (e) {
+    console.log(`OpenSea's current listings could not be read for the check (${e.message})`);
+  }
   writeLines('listings.jsonl', kept);
   writeLines('cancels.jsonl', cancels.concat(freshCancels));
   writeLines('events.jsonl', events.concat(moves));
-  writeJson('head.json', { block: block.number, time: block.time, listingsTime, deepRead, failures, fills: 1,
+  writeJson('head.json', { block: block.number, time: block.time, listingsTime, deepRead, failures, fills: 1, opensea,
                            events: events.length + moves.length, cancels: cancels.length + freshCancels.length,
                            listings: kept.length });
   console.log(`block ${block.number}: ${moves.length} moves, ${freshCancels.length} on-chain cancellations or sales of listings, ` +
@@ -652,6 +678,7 @@ function publish(dir) {
   }
   fs.writeFileSync(path.join(dir, 'data', 'summary.json'), JSON.stringify({
     time: s.time, block: head.block, listingsTime: head.listingsTime, nft: genesis.nft, rules: genesis.rules,
+    opensea: head.opensea || null,
     start: { block: genesis.block, time: genesis.time, wallets: genesis.holders.length, units: startTotal, listed: new Set((genesis.listings || []).map(l => l.id)).size },
     totals: { units: s.total, holders, earning: s.supply - s.listedCount, listed: s.listedCount, supply: s.supply },
   }));
