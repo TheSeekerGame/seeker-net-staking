@@ -126,7 +126,7 @@ async function logs(filter, from, to, span = 5000000) {
   for (let lo = from; lo <= to;) {
     const hi = Math.min(lo + span - 1, to);
     try {
-      out.push(...await rpc('eth_getLogs', [{ ...filter, fromBlock: hex(lo), toBlock: hex(hi) }]));
+      for (const l of await rpc('eth_getLogs', [{ ...filter, fromBlock: hex(lo), toBlock: hex(hi) }])) out.push(l);
       lo = hi + 1;
     } catch (e) {
       if (!e.rpc || span <= 500) throw e;
@@ -144,11 +144,11 @@ const transferLogs = async (from, to) => (await logs({ address: CONFIG.nft, topi
 async function seaportLogs(from, to, offerers, kinds = [TOPIC.cancel, TOPIC.counter, TOPIC.fill]) {
   const out = [];
   for (const address of CONFIG.seaports) {
-    if (!offerers) { out.push(...await logs({ address, topics: [kinds] }, from, to)); continue; }
+    if (!offerers) { for (const l of await logs({ address, topics: [kinds] }, from, to)) out.push(l); continue; }
     const list = [...offerers];
     for (let i = 0; i < list.length; i += 100) {
       const who = list.slice(i, i + 100).map(a => '0x' + a.slice(2).padStart(64, '0'));
-      out.push(...await logs({ address, topics: [kinds, who] }, from, to, 100000));   // the RPC takes lists of addresses over at most 100,000 blocks
+      for (const l of await logs({ address, topics: [kinds, who] }, from, to, 100000)) out.push(l);   // the RPC takes lists of addresses over at most 100,000 blocks
     }
   }
   return out.sort(chainOrder);
@@ -491,7 +491,7 @@ async function run() {
   }
   const late = added.filter(l => l.t < head.time);              // found late: look back for their cancellations too
   if (late.length) {
-    const from = Math.max(genesis.block + 1, estimateBlock(genesis, head, Math.min(...late.map(l => l.t))) - 200000);
+    const from = Math.max(genesis.block + 1, estimateBlock(genesis, head, late.reduce((m, l) => Math.min(m, l.t), Infinity)) - 200000);
     seaport = seaport.concat(await seaportLogs(from, head.block, new Set(late.map(l => l.maker))));
   }
   const have = new Set(cancels.map(c => c.b + ':' + c.i));
