@@ -10,7 +10,10 @@
                          moment, read from OpenSea then and published with
                          their orders as OpenSea served them (data/orders.jsonl)
      data/events.jsonl   every move of a seeker since the start (its Transfer
-                         events, in chain order), plus corrections made by hand
+                         events, in chain order), every ApprovalForAll for
+                         OpenSea's conduit since the contract began (who lets
+                         OpenSea move their seekers), plus corrections made by
+                         hand
      data/cancels.jsonl  the on-chain cancellations and sales that end a seeker
                          listing: Seaport's OrderCancelled or OrderFulfilled for
                          a listing in the record, and CounterIncremented by a
@@ -38,9 +41,12 @@
           posted before it),
         - its own sale: Seaport's OrderFulfilled for that order (a listing can
           be bought only once).
-      A valid listing is live whenever its lister holds the seeker: it pauses
-      while the seeker is in another wallet and counts again if it comes back,
-      since it can then be bought again.
+      A valid listing is live whenever its lister holds the seeker and lets
+      OpenSea move their seekers (ApprovalForAll for OpenSea's conduit on the
+      SEEKER NET contract): it pauses while the seeker is in another wallet or
+      that permission is withdrawn, and counts again when both are back, since
+      it can then be bought again. A wallet with no such event on record counts
+      as having the permission (OpenSea asks for it before the first listing).
       A cancellation that doesn't go on-chain leaves no public record of when it
       happened, so it does not end a listing early.
    4. When a seeker changes wallet (a sale or a plain transfer), 7 of the
@@ -76,6 +82,8 @@
     const liveOn = Array.from({ length: N + 1 }, () => new Set());   // seeker -> live order hashes
     const cancelled = new Set();          // order hashes cancelled on-chain, or bought
     const counterAt = new Map();          // lister -> time of their last CounterIncremented
+    const approved = new Map();           // address -> whether OpenSea may move their seekers (no entry: yes)
+    const allowed = a => approved.get(a) !== false;
     const accounts = new Map();
     const spans = new Map();              // order hash -> [[live from, live until], ...] (until null while live)
     let now = genesis.time;
@@ -144,15 +152,20 @@
     }
     // the listings live at the start
     const steps = [];
+    // who let OpenSea move their seekers at the start (the permissions given or withdrawn up to the start block)
+    const atStart = e => e.k === 'approval' && e.b <= genesis.block;
+    for (const e of events.filter(atStart).sort((x, y) => x.b - y.b || x.i - y.i)) approved.set(e.a, e.on);
+    events = events.filter(e => !atStart(e));
     for (const l of genesis.listings || []) {
       if (owner[l.id] !== l.maker) throw new Error(`start: listing ${l.h} is not by the holder of seeker ${l.id}`);
-      if (liveOn[l.id].size === 0) account(l.maker).unlisted--;
       valid.set(l.h, l);
       validOn[l.id].add(l.h);
+      steps.push({ t: l.e, phase: 0, key: l.h, end: l.h });
+      if (!allowed(l.maker)) continue;
+      if (liveOn[l.id].size === 0) account(l.maker).unlisted--;
       live.set(l.h, l);
       liveOn[l.id].add(l.h);
       spans.set(l.h, [[genesis.time, null]]);
-      steps.push({ t: l.e, phase: 0, key: l.h, end: l.h });
     }
 
     // everything since, in time order (see ORDER above); chain events in chain
@@ -183,7 +196,7 @@
         if (cancelled.has(l.h) || l.t < (counterAt.get(l.maker) ?? -Infinity)) continue;
         valid.set(l.h, l);
         validOn[l.id].add(l.h);
-        if (owner[l.id] === l.maker) start(l);
+        if (owner[l.id] === l.maker && allowed(l.maker)) start(l);
         continue;
       }
 
@@ -202,7 +215,7 @@
         owner[e.id] = e.to;
         from.history.push({ t: now, k: 'out', id: e.id, d: -give, who: e.to, tx: e.tx });
         to.history.push({ t: now, k: 'in', id: e.id, d: give, who: e.from, tx: e.tx });
-        for (const h of [...validOn[e.id]]) if (valid.get(h).maker === e.to) start(valid.get(h));   // back with its lister
+        if (allowed(e.to)) for (const h of [...validOn[e.id]]) if (valid.get(h).maker === e.to) start(valid.get(h));   // back with its lister
       } else if (e.k === 'cancel') {                        // Seaport OrderCancelled
         cancelled.add(e.h);
         invalidate(e.h, 'cancelled');
@@ -212,6 +225,11 @@
       } else if (e.k === 'counter') {                       // Seaport CounterIncremented: all of the lister's orders so far
         counterAt.set(e.a, e.t);
         for (const [h, l] of [...valid]) if (l.maker === e.a) invalidate(h, 'cancelled');
+      } else if (e.k === 'approval') {                      // ApprovalForAll for OpenSea's conduit: can OpenSea move their seekers?
+        if (allowed(e.a) === e.on) { approved.set(e.a, e.on); continue; }
+        approved.set(e.a, e.on);
+        if (!e.on) { for (const [h, l] of [...live]) if (l.maker === e.a) end(h, 'paused'); }
+        else for (const l of [...valid.values()]) if (l.maker === e.a && owner[l.id] === e.a && !live.has(l.h)) start(l);
       } else if (e.k === 'adjust') {                        // a correction made by hand, with its reason
         if (!Number.isInteger(e.credits)) throw new Error(`a correction is in whole credits (${e.note})`);
         const x = settle(account(e.a));

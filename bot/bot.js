@@ -37,6 +37,7 @@ const CONFIG = {
   nft: '0x5ac790269a6c71a51ba68bf6a3a2647f86788792',    // SEEKER NET
   slug: 'seeker-net',                                   // the collection's name in OpenSea's addresses
   seaports: ['0x0000000000000068f116a894984e2db1123eb395'],   // Seaport 1.6, which OpenSea uses on this chain
+  conduit: '0x963f00d3ff000064ffcba824b800c0000000c300',      // OpenSea's conduit here: its listings can only be bought while the lister lets it move their seekers
   supply: 2222,
   firstBlock: 83689515,                                 // the contract's first event: nothing to read before it
   rules: { start: 7, startMax: 100, perDay: 1, moveMax: 7 },   // start: per seeker held, capped at startMax credits per wallet
@@ -54,6 +55,7 @@ const DATA = process.env.CREDITS_DATA || path.join(ROOT, 'data');
 const KEY_FILE = process.env.OPENSEA_KEY_FILE || path.join(ROOT, '.opensea-key.json');
 const TOPIC = {
   transfer: '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',   // Transfer(address,address,uint256)
+  approval: '0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31',   // ApprovalForAll(address,address,bool)
   cancel: '0x6bacc01dbe442496068f7d234edd811f1a5f833243e0aec824f86ab861f3c90d',     // OrderCancelled(bytes32,address,address)
   counter: '0x721c20121297512b72821b97f5326877ea8ecf4bb9948fea5bfcb6453074d37f',    // CounterIncremented(uint256,address)
   fill: '0x9d9af8e38d66c62e2c12f0225249fd9d721c54b83f48d9352c97c6cacdcb6f31',       // OrderFulfilled(bytes32,address,address,address,(uint8,address,uint256,uint256)[],(uint8,address,uint256,uint256,address)[])
@@ -182,6 +184,15 @@ async function moveEvents(from, to) {
   return moves.map(l => ({ k: 'move', t: time.get(Number(l.blockNumber)), b: Number(l.blockNumber), i: Number(l.logIndex),
                            id: Number(BigInt(l.topics[3])), from: addr(l.topics[1]), to: addr(l.topics[2]), tx: l.transactionHash }));
 }
+
+/** Who lets OpenSea move their seekers: ApprovalForAll for OpenSea's conduit, in blocks from..to. */
+async function approvalEvents(from, to) {
+  const found = (await logs({ address: CONFIG.nft, topics: [TOPIC.approval, null, '0x' + CONFIG.conduit.slice(2).padStart(64, '0')] }, from, to)).sort(chainOrder);
+  const time = await blockTimes(found.map(l => l.blockNumber));
+  return found.map(l => ({ k: 'approval', t: time.get(Number(l.blockNumber)), b: Number(l.blockNumber), i: Number(l.logIndex),
+                           a: addr(l.topics[1]), on: BigInt(l.data) !== 0n, tx: l.transactionHash }));
+}
+const approvalKey = e => JSON.stringify([e.t, e.b, e.i, e.a, e.on, e.tx]);
 
 /** Of the Seaport logs of listers' wallets, the ones that end a seeker listing,
     as records (see rules.js): OrderCancelled or OrderFulfilled (it was bought)
@@ -432,15 +443,16 @@ async function start() {
   };
   const atStart = new Set(live.map(l => l.h));
   const later = (await listingHistory(T, now())).filter(l => Rules.liveFrom(l) >= T && !atStart.has(l.h));
-  Rules.replay(genesis, [], later, T);                           // throws if anything is inconsistent
+  const permissions = await approvalEvents(CONFIG.firstBlock, block.number);
+  Rules.replay(genesis, permissions, later, T);                  // throws if anything is inconsistent
   fs.mkdirSync(DATA, { recursive: true });
   writeJson('genesis.json', genesis);
-  writeLines('events.jsonl', []);
+  writeLines('events.jsonl', permissions);
   writeLines('cancels.jsonl', []);
   writeLines('listings.jsonl', later);
   const keep = new Set([...atStart, ...later.map(l => l.h)]);
   writeLines('orders.jsonl', orders.filter(o => keep.has(o.h)).map(({ h, protocol, parameters, signature }) => ({ h, protocol, parameters, signature })));
-  writeJson('head.json', { block: block.number, time: T, listingsTime: now(), events: 0, cancels: 0, listings: later.length });
+  writeJson('head.json', { block: block.number, time: T, listingsTime: now(), approvals: 1, events: permissions.length, cancels: 0, listings: later.length });
   console.log(`start: ${holders.length} addresses get ${CONFIG.rules.start} credits per seeker, capped at ${CONFIG.rules.startMax} per wallet; ` +
               `${new Set(live.map(l => l.id)).size} seekers start as listed (${live.length} live listings by their holders)`);
 }
@@ -482,8 +494,10 @@ async function run() {
   const all = (genesis.listings || []).concat(listings, added);
 
   // the chain: the moves, and the Seaport logs of every lister's wallet
-  const recorded = new Set(events.filter(e => e.k === 'move').map(e => e.b + ':' + e.i));
-  const moves = (await moveEvents(head.block + 1, block.number)).filter(e => !recorded.has(e.b + ':' + e.i));
+  const recorded = new Set(events.filter(e => e.k === 'move' || e.k === 'approval').map(e => e.k + e.b + ':' + e.i));
+  const moves = (await moveEvents(head.block + 1, block.number))
+    .concat(await approvalEvents(head.approvals ? head.block + 1 : CONFIG.firstBlock, block.number))   // the first round with this rule looks back to the contract's start
+    .filter(e => !recorded.has(e.k + e.b + ':' + e.i));
   const makers = new Set(all.map(l => l.maker));
   let seaport = makers.size ? await seaportLogs(head.block + 1, block.number, makers) : [];
   if (!head.fills && makers.size && head.block > genesis.block) {   // the first round that records sales looks back to the start for them
@@ -529,10 +543,10 @@ async function run() {
   writeLines('listings.jsonl', kept);
   writeLines('cancels.jsonl', cancels.concat(freshCancels));
   writeLines('events.jsonl', events.concat(moves));
-  writeJson('head.json', { block: block.number, time: block.time, listingsTime, deepRead, failures, fills: 1, opensea,
+  writeJson('head.json', { block: block.number, time: block.time, listingsTime, deepRead, failures, fills: 1, approvals: 1, opensea,
                            events: events.length + moves.length, cancels: cancels.length + freshCancels.length,
                            listings: kept.length });
-  console.log(`block ${block.number}: ${moves.length} moves, ${freshCancels.length} on-chain cancellations or sales of listings, ` +
+  console.log(`block ${block.number}: ${moves.filter(e => e.k === 'move').length} moves, ${moves.filter(e => e.k === 'approval').length} OpenSea permissions given or withdrawn, ${freshCancels.length} on-chain cancellations or sales of listings, ` +
               `${added.length} new listings, ${listings.length + added.length - kept.length} overlapping relistings left out; ` +
               `${after.listedCount} seekers listed; ${Rules.credits(after.total, 0)} credits exist`);
   if (failures >= CONFIG.failAfter) {
@@ -576,6 +590,10 @@ async function verify() {
   const mine = events.filter(e => e.k === 'move');
   say(same(mine, moves, e => JSON.stringify([e.t, e.b, e.i, e.id, e.from, e.to, e.tx])),
       `the ${mine.length} moves on record are exactly the chain's Transfer events (${moves.length}), in order, up to block ${head.block}`);
+  const permissions = await approvalEvents(CONFIG.firstBlock, head.block);
+  const mineP = events.filter(e => e.k === 'approval').sort((x, y) => x.b - y.b || x.i - y.i);
+  say(same(mineP, permissions, approvalKey),
+      `the ${mineP.length} OpenSea permissions on record are exactly the chain's ApprovalForAll events for its conduit (${permissions.length}), up to block ${head.block}`);
   const fixes = events.filter(e => e.k === 'adjust');
   if (fixes.length) console.log(`note  ${fixes.length} corrections made by hand, each with its reason`);
 
@@ -603,7 +621,7 @@ async function verify() {
   say(cancels.every(c => real.has(ck(c))), `the ${cancels.length} on-chain cancellations and sales on record are all real (the chain has ${chainCancels.length} for these listings)`);
   if (history) {
     // end to end: everything rebuilt from the chain and OpenSea's full history, against the record
-    const rebuilt = Rules.replay(genesis, moves.concat(fixes, chainCancels), all.filter(l => !(genesis.listings || []).some(x => x.h === l.h)), head.time);
+    const rebuilt = Rules.replay(genesis, moves.concat(permissions, fixes, chainCancels), all.filter(l => !(genesis.listings || []).some(x => x.h === l.h)), head.time);
     const recordOnly = play();
     const numbers = x => [...x.accounts.values()].map(y => [y.address, y.units].join()).sort().join('|');
     say(numbers(rebuilt) === numbers(recordOnly), `every wallet's balance rebuilt from the chain and OpenSea's full history equals the record's, to the unit` +
@@ -685,7 +703,7 @@ function publish(dir) {
   console.log(`published ${n} wallets and the summary at block ${head.block}`);
 }
 
-module.exports = { CONFIG, TOPIC, blockAt, blockBefore, ownersAt, moveEvents, seaportLogs, cancelEvents, listingFromEvent, seconds, snapshotListings, prune };
+module.exports = { CONFIG, TOPIC, blockAt, blockBefore, ownersAt, moveEvents, approvalEvents, seaportLogs, cancelEvents, listingFromEvent, seconds, snapshotListings, prune };
 
 if (require.main === module) {
   const [command, argument] = process.argv.slice(2);

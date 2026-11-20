@@ -187,7 +187,7 @@
       <dt>Earning</dt>
       <dd>Every unlisted seeker earns its owner 1 credit per day, counted by the second. Nothing to click or sign.</dd>
       <dt>What "listed" means</dt>
-      <dd>A seeker is listed while its holder has a live OpenSea listing for it (any price, private listings too): from when it's posted (or its start time, if later) until its end date, an on-chain cancel, or its own sale (a listing can be bought only once). If the seeker moves to another wallet any other way, the listing pauses; if it comes back before the end date, the listing counts again, since it can be bought again. Listed seekers earn nothing.</dd>
+      <dd>A seeker is listed while its holder has a live OpenSea listing for it (any price, private listings too): from when it's posted (or its start time, if later) until its end date, an on-chain cancel, or its own sale (a listing can be bought only once). If the seeker moves to another wallet any other way, or its holder withdraws OpenSea's permission to move their seekers (an on-chain approval), the listing pauses; if both are back before the end date, the listing counts again, since it can be bought again. Listed seekers earn nothing.</dd>
       <dt>Ending a listing early</dt>
       <dd>Only an on-chain cancel ends a listing before its end date. On OpenSea that's the normal cancel, which asks you to approve a small transaction (see "How to delist" above). A cancel that doesn't go through your wallet leaves no public record, so the listing keeps counting until its end date.</dd>
       <dt>Selling and moving</dt>
@@ -355,7 +355,8 @@ async function show(input, again) {
     const tx = h.tx ? el('a', { href: `${EXPLORER}/tx/${h.tx}`, target: '_blank', rel: 'noopener', textContent: 'tx', className: 'muted' }) : '';
     if (h.k === 'start') return ['start: ' + h.n + ' seeker' + (h.n === 1 ? '' : 's') + ' held'];
     if (h.k === 'list') return ['listed ', seeker, ' until ' + when(h.until) + ': not earning'];
-    if (h.k === 'unlist') return [seeker, h.why === 'cancelled' ? ' listing cancelled on-chain: earning again' : ' listing ended: earning again'];
+    if (h.k === 'unlist') return [seeker, h.why === 'cancelled' ? ' listing cancelled on-chain: earning again'
+      : h.why === 'paused' ? ' listing paused (OpenSea permission withdrawn): earning again' : ' listing ended: earning again'];
     if (h.k === 'out') return ['sent ', seeker, ' to ', addressLink(h.who), h.d ? '' : ' (no credits to send)', ' ', tx];
     if (h.k === 'in') return ['got ', seeker, ' from ', addressLink(h.who), h.d ? '' : ' (sender had no credits)', ' ', tx];
     if (h.k === 'adjust') return ['Correction: ' + (h.note || '')];

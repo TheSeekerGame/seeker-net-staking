@@ -15,7 +15,7 @@ const LIVE = { ...CONFIG.rules };
 /** A small collection: owners[i] holds seeker i+1. */
 function genesis(owners, rules = RULES, listings = []) {
   const holders = [...new Set(owners)].sort();
-  return { supply: owners.length, time: T0, rules, holders, owner: owners.map(a => holders.indexOf(a)), listings };
+  return { supply: owners.length, time: T0, block: 0, rules, holders, owner: owners.map(a => holders.indexOf(a)), listings };
 }
 const at = day => T0 + Math.round(day * DAY);
 let n = 0;
@@ -155,6 +155,28 @@ test('a listing that was bought is over for good: it does not come back with the
   const two = play(genesis([A]), [...sale(true), move(3, 1, B, A)], [...L, listing('0xh2', 1, A, 1.5, 30)], 10);
   assert.equal(two.listed[1], 1);
   assert.deepEqual([...two.live.keys()], ['0xh2']);
+});
+
+test('withdrawing OpenSea\'s permission pauses the lister\'s listings; granting it again brings back those not yet ended', () => {
+  const approval = (day, a, on, b = ++n) => ({ k: 'approval', t: at(day), b, i: 0, a, on, tx: '0x6' });
+  const L = [listing('0xh1', 1, A, 1, 30), listing('0xh2', 2, A, 1, 5)];
+  const s = play(genesis([A, A]), [approval(3, A, false), approval(7, A, true)], L, 10);
+  assert.equal(s.listed[1], 1);                                         // back from day 7
+  assert.equal(s.listed[2], 0);                                         // ended on day 5, while paused
+  assert.equal(bal(s, A), 7 + 2 + 2 * 4 + 1 * 3 + 0);                   // start 7 (capped); days 1-3 both listed; 3-7 both earn; 7-10 one earns
+  assert.deepEqual(s.spans.get('0xh1'), [[at(1), at(3)], [at(7), null]]);
+  // a listing posted while the permission is withdrawn waits for it
+  const w = play(genesis([A]), [approval(0.5, A, false), approval(4, A, true)], [listing('0xh1', 1, A, 1, 30)], 10);
+  assert.equal(bal(w, A), 7 + 4);
+  // permissions before the start set who can list at the start; no event on record means allowed
+  const g = genesis([A, B], RULES, [listing('0xs1', 1, A, -2, 30), listing('0xs2', 2, B, -2, 30)]);
+  const before = { k: 'approval', t: at(-1), b: 0, i: 0, a: A, on: false, tx: '0x7' };
+  const x = Rules.replay(g, [before], [], at(10));
+  assert.equal(x.listed[1], 0);
+  assert.equal(x.listed[2], 1);
+  // and the order the record lists them in changes nothing
+  const y = Rules.replay(g, [approval(3, B, false, 50), before].reverse(), [], at(10));
+  assert.equal(y.listed[2], 0);
 });
 
 test('a move takes 7 of the sender\'s credits to the new owner; a short seller gives what they have', () => {
